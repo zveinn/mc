@@ -23,6 +23,27 @@ import (
 	"github.com/minio/cli"
 )
 
+var (
+	rmFlag               = "retention-mode"
+	rdFlag               = "retention-duration"
+	lhFlag               = "legal-hold"
+	continueFlag         = "continue"
+	md5Flag              = "md5"
+	disableMultipartFlag = "disable-multipart"
+	recursiveFlag        = "recursive"
+	rewindFlag           = "rewind"
+	versionIDFlag        = "version-id"
+	olderThanFlag        = "older-than"
+	newerThanFlag        = "newer-than"
+	storageClassFlag     = "storage-class"
+	tagsFlag             = "tags"
+	encryptFlag          = "encrypt"
+	encryptKeyFlag       = "encrypt-key"
+	preserveFlag         = "preserve"
+	attrFlag             = "attr"
+	zipFlag              = "zip"
+)
+
 // Collection of mc flags currently supported
 var globalFlags = []cli.Flag{
 	cli.StringFlag{
@@ -75,7 +96,7 @@ var globalFlags = []cli.Flag{
 // Flags common across all I/O commands such as cp, mirror, stat, pipe etc.
 var ioFlags = []cli.Flag{
 	cli.StringFlag{
-		Name:  "encrypt-key",
+		Name:  encryptKeyFlag,
 		Usage: "encrypt/decrypt objects (using server-side encryption with customer provided keys)",
 	},
 }

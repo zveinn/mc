@@ -54,15 +54,18 @@ const (
 // guessCopyURLType guesses the type of clientURL. This approach all allows prepareURL
 // functions to accurately report failure causes.
 func guessCopyURLType(ctx context.Context, o prepareCopyURLsOpts) (copyURLsType, string, *probe.Error) {
+
 	if len(o.sourceURLs) == 1 { // 1 Source, 1 Target
 		var err *probe.Error
 		var sourceContent *ClientContent
 		sourceURL := o.sourceURLs[0]
+
 		if !o.isRecursive {
 			_, sourceContent, err = url2Stat(ctx, sourceURL, o.versionID, false, o.encKeyDB, o.timeRef, o.isZip)
 		} else {
 			_, sourceContent, err = firstURL2Stat(ctx, sourceURL, o.timeRef, o.isZip)
 		}
+
 		if err != nil {
 			return copyURLsTypeInvalid, "", err
 		}
@@ -208,7 +211,9 @@ func makeCopyContentTypeC(sourceAlias string, sourceURL ClientURL, sourceContent
 // MULTI-SOURCE - Type D: copy([](f|d...), d) -> []B
 // prepareCopyURLsTypeE - prepares target and source clientURLs for copying.
 func prepareCopyURLsTypeD(ctx context.Context, sourceURLs []string, targetURL string, isRecursive bool, timeRef time.Time) <-chan URLs {
+
 	copyURLsCh := make(chan URLs)
+
 	go func(sourceURLs []string, targetURL string, copyURLsCh chan URLs) {
 		defer close(copyURLsCh)
 		for _, sourceURL := range sourceURLs {
@@ -217,6 +222,7 @@ func prepareCopyURLsTypeD(ctx context.Context, sourceURLs []string, targetURL st
 			}
 		}
 	}(sourceURLs, targetURL, copyURLsCh)
+
 	return copyURLsCh
 }
 
@@ -234,6 +240,7 @@ type prepareCopyURLsOpts struct {
 // prepareCopyURLs - prepares target and source clientURLs for copying.
 func prepareCopyURLs(ctx context.Context, o prepareCopyURLsOpts) chan URLs {
 	copyURLsCh := make(chan URLs)
+
 	go func(o prepareCopyURLsOpts) {
 		defer close(copyURLsCh)
 		cpType, cpVersion, err := guessCopyURLType(ctx, o)
@@ -243,11 +250,14 @@ func prepareCopyURLs(ctx context.Context, o prepareCopyURLsOpts) chan URLs {
 		case copyURLsTypeA:
 			copyURLsCh <- prepareCopyURLsTypeA(ctx, o.sourceURLs[0], cpVersion, o.targetURL, o.encKeyDB, o.isZip)
 		case copyURLsTypeB:
+
 			copyURLsCh <- prepareCopyURLsTypeB(ctx, o.sourceURLs[0], cpVersion, o.targetURL, o.encKeyDB, o.isZip)
+
 		case copyURLsTypeC:
 			for cURLs := range prepareCopyURLsTypeC(ctx, o.sourceURLs[0], o.targetURL, o.isRecursive, o.isZip, o.timeRef) {
 				copyURLsCh <- cURLs
 			}
+
 		case copyURLsTypeD:
 			for cURLs := range prepareCopyURLsTypeD(ctx, o.sourceURLs, o.targetURL, o.isRecursive, o.timeRef) {
 				copyURLsCh <- cURLs
@@ -255,6 +265,7 @@ func prepareCopyURLs(ctx context.Context, o prepareCopyURLsOpts) chan URLs {
 		default:
 			copyURLsCh <- URLs{Error: errInvalidArgument().Trace(o.sourceURLs...)}
 		}
+
 	}(o)
 
 	finalCopyURLsCh := make(chan URLs)

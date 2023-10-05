@@ -20,6 +20,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"time"
 
@@ -27,6 +28,94 @@ import (
 	"github.com/minio/mc/pkg/probe"
 	"github.com/minio/pkg/v2/console"
 )
+
+func validateLocalSourceExistance(ctx context.Context, cliCtx *cli.Context, encKeyDB map[string][]prefixSSEPair) {
+
+	URLs := cliCtx.Args()
+	if len(URLs) < 2 {
+		fatalIf(errDummy().Trace(cliCtx.Args()...), "Unable to parse source and target arguments.")
+	}
+
+	srcURLs := URLs[:len(URLs)-1]
+	versionID := cliCtx.String(versionIDFlag)
+
+	for _, srcURL := range srcURLs {
+
+		// Use expandAlias to verify that the srcURL is an alias/remote
+		_, _, alisCfg, _ := expandAlias(srcURL)
+		if alisCfg != nil {
+			continue
+		}
+
+		_, err := os.Stat(srcURL)
+		if err != nil {
+			msg := "Unable to validate source `" + srcURL + "`"
+			if versionID != "" {
+				msg += " (" + versionID + ")"
+			}
+			msg += ": " + err.Error()
+			console.Fatalln(msg)
+		}
+
+	}
+
+}
+
+func validateCPCommandLineParameters(ctx context.Context, cliCtx *cli.Context) {
+	if len(cliCtx.Args()) < 2 {
+		showCommandHelpAndExit(cliCtx, 1) // last argument is exit code.
+	}
+
+	validateCommandLineParameters(ctx, cliCtx)
+}
+
+func validateMVCommandLineParameters(ctx context.Context, cliCtx *cli.Context) {
+	if len(cliCtx.Args()) < 2 {
+		showCommandHelpAndExit(cliCtx, 1) // last argument is exit code.
+	}
+
+	validateCommandLineParameters(ctx, cliCtx)
+}
+
+func validateCommandLineParameters(ctx context.Context, cliCtx *cli.Context) {
+	// extract URLs.
+	URLs := cliCtx.Args()
+	if len(URLs) < 2 {
+		fatalIf(errDummy().Trace(cliCtx.Args()...), "Unable to parse source and target arguments.")
+	}
+
+	srcURLs := URLs[:len(URLs)-1]
+	tgtURL := URLs[len(URLs)-1]
+	isZip := cliCtx.Bool(zipFlag)
+	versionID := cliCtx.String(versionIDFlag)
+
+	if versionID != "" && len(srcURLs) > 1 {
+		fatalIf(errDummy().Trace(cliCtx.Args()...), "Unable to pass --version flag with multiple copy sources arguments.")
+	}
+
+	if isZip && cliCtx.String(rewindFlag) != "" {
+		fatalIf(errDummy().Trace(cliCtx.Args()...), "--zip and --rewind cannot be used together")
+	}
+
+	url := newClientURL(tgtURL)
+	if url.Host != "" {
+		if url.Path == string(url.Separator) {
+			fatalIf(errInvalidArgument().Trace(), fmt.Sprintf("Target `%s` does not contain bucket name.", tgtURL))
+		}
+	}
+
+	if cliCtx.String(rdFlag) != "" && cliCtx.String(rmFlag) == "" {
+		fatalIf(errInvalidArgument().Trace(), fmt.Sprintf("Both object retention flags `--%s` and `--%s` are required.\n", rdFlag, rmFlag))
+	}
+
+	if cliCtx.String(rdFlag) == "" && cliCtx.String(rmFlag) != "" {
+		fatalIf(errInvalidArgument().Trace(), fmt.Sprintf("Both object retention flags `--%s` and `--%s` are required.\n", rdFlag, rmFlag))
+	}
+
+	if cliCtx.Bool(preserveFlag) && runtime.GOOS == "windows" {
+		fatalIf(errInvalidArgument().Trace(), "Permissions are not preserved on windows platform.")
+	}
+}
 
 func checkCopySyntax(ctx context.Context, cliCtx *cli.Context, encKeyDB map[string][]prefixSSEPair, isMvCmd bool) {
 	if len(cliCtx.Args()) < 2 {
@@ -59,6 +148,13 @@ func checkCopySyntax(ctx context.Context, cliCtx *cli.Context, encKeyDB map[stri
 
 	// Verify if source(s) exists.
 	for _, srcURL := range srcURLs {
+
+		// Do not verify existance of objects on remote systems
+		_, _, alisCfg, _ := expandAlias(srcURL)
+		if alisCfg != nil {
+			continue
+		}
+
 		var err *probe.Error
 		if !isRecursive {
 			_, _, err = url2Stat(ctx, srcURL, versionID, false, encKeyDB, timeRef, isZip)
@@ -126,8 +222,10 @@ func checkCopySyntax(ctx context.Context, cliCtx *cli.Context, encKeyDB map[stri
 			fatalIf(errInvalidArgument().Trace(), "Invalid number of source arguments.")
 		}
 		checkCopySyntaxTypeB(ctx, srcURLs[0], versionID, tgtURL, encKeyDB, isZip, timeRef)
+
 	case copyURLsTypeC: // Folder... -> Folder.
 		checkCopySyntaxTypeC(ctx, srcURLs, tgtURL, isRecursive, isZip, encKeyDB, isMvCmd, timeRef)
+
 	case copyURLsTypeD: // File1...FileN -> Folder.
 		checkCopySyntaxTypeD(ctx, tgtURL, encKeyDB, timeRef)
 	default:
