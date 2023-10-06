@@ -18,6 +18,7 @@
 package main // import "github.com/minio/mc"
 
 import (
+	"log"
 	"os"
 
 	mc "github.com/minio/mc/cmd"
@@ -25,6 +26,7 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if e := mc.Main(os.Args); e != nil {
 		console.Fatalln(e)
 	}

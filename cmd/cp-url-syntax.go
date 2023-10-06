@@ -204,7 +204,7 @@ func checkCopySyntax(ctx context.Context, cliCtx *cli.Context, encKeyDB map[stri
 		versionID:   versionID,
 		isZip:       isZip,
 	}
-	copyURLsType, _, err := guessCopyURLType(ctx, opts)
+	copyURLsType, _, _, err := guessCopyURLType(ctx, opts)
 	if err != nil {
 		fatalIf(errInvalidArgument().Trace(), "Unable to guess the type of "+operation+" operation.")
 	}

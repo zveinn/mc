@@ -66,11 +66,13 @@ type PutOptions struct {
 // StatOptions holds options of the HEAD operation
 type StatOptions struct {
 	incomplete bool
-	preserve   bool
-	sse        encrypt.ServerSide
-	timeRef    time.Time
-	versionID  string
-	isZip      bool
+	// Preserves filesystem settings for the file in question.
+	// Saving them as metadata inside the ClientContent
+	preserve  bool
+	sse       encrypt.ServerSide
+	timeRef   time.Time
+	versionID string
+	isZip     bool
 }
 
 // ListOptions holds options for listing operation

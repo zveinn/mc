@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -414,6 +415,7 @@ func startCopyWithoutSession(
 		default:
 		}
 
+		log.Println("CPURLS: ", cpURLs)
 		if cpURLs.Error != nil {
 			// Print in new line and adjust to top so that we
 			// don't print over the ongoing scan bar
@@ -550,9 +552,11 @@ func startCopyWithSession(
 
 		// Verify if previously copied, notify progress bar.
 		if isCopied != nil && isCopied(cpURLs.SourceContent.URL.String()) {
+
 			parallel.queueTask(func() URLs {
 				return doCopyFake(cpURLs, pg)
 			}, 0)
+
 		} else {
 			// Print the copy resume summary once in start
 			if startContinue && cli.Bool(continueFlag) {
@@ -563,9 +567,11 @@ func startCopyWithSession(
 				}
 				startContinue = false
 			}
+
 			parallel.queueTask(func() URLs {
 				return doCopy(ctx, cpURLs, pg, encKeyDB, false, preserve, isZip)
 			}, cpURLs.SourceContent.Size)
+
 		}
 	}
 
@@ -993,7 +999,7 @@ loop:
 	}
 
 	if progressReader, ok := pg.(*progressBar); ok {
-		if (errSeen && totalObjects == 1) || (cpAllFilesErr && totalObjects > 1) {
+		if (errSeen && totalObjects == 1) || (cpAllFilesErr) {
 			console.Eraseline()
 		} else if progressReader.ProgressBar.Get() > 0 {
 			progressReader.ProgressBar.Finish()
@@ -1019,7 +1025,7 @@ func mainCopy(cliCtx *cli.Context) (mainErr error) {
 	fatalIf(err, "Unable to parse encryption keys.")
 
 	// TODO .. Review this
-	//validateLocalSourceExistance(ctx, cliCtx, encKeyDB)
+	validateLocalSourceExistance(ctx, cliCtx, encKeyDB)
 
 	// Additional command specific theme customization.
 	console.SetColor("Copy", color.New(color.FgGreen, color.Bold))

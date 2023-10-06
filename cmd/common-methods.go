@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -549,7 +550,7 @@ func uploadSourceToTargetURL(ctx context.Context, urls URLs, progress io.Reader,
 		}
 
 		var reader io.ReadCloser
-		// Proceed with regular stream copy.
+		// Proce1ed with regular stream copy.
 		reader, metadata, err = getSourceStream(ctx, sourceAlias, sourceURL.String(), getSourceOpts{
 			GetOptions: GetOptions{
 				VersionID: sourceVersion,
@@ -600,14 +601,17 @@ func uploadSourceToTargetURL(ctx context.Context, urls URLs, progress io.Reader,
 		}
 
 		if isReadAt(reader) {
+			log.Println("PUT!!!! 1")
 			_, err = putTargetStream(ctx, targetAlias, targetURL.String(), mode, until,
 				legalHold, reader, length, progress, putOpts)
 		} else {
+			log.Println("PUT!!!! 2")
 			_, err = putTargetStream(ctx, targetAlias, targetURL.String(), mode, until,
 				legalHold, io.LimitReader(reader, length), length, progress, putOpts)
 		}
 	}
 	if err != nil {
+		log.Println("PUT ERR:", err)
 		return urls.WithError(err.Trace(sourceURL.String()))
 	}
 

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -367,7 +368,10 @@ func (f *fsClient) put(_ context.Context, reader io.Reader, size int64, progress
 	}
 
 	// Safely completed put. Now commit by renaming to actual filename.
+	log.Println("RENAME!!!")
+	log.Println(objectPartPath, objectPath)
 	if e = os.Rename(objectPartPath, objectPath); e != nil {
+		log.Println("RENAME ERR:", e)
 		err := f.toClientError(e, objectPath)
 		return totalWritten, err.Trace(objectPartPath, objectPath)
 	}

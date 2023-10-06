@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -1575,6 +1576,7 @@ func (c *S3Client) Stat(ctx context.Context, opts StatOptions) (*ClientContent, 
 	c.Lock()
 	defer c.Unlock()
 	bucket, path := c.url2BucketAndObject()
+	// log.Println(string(debug.Stack()))
 
 	// Bucket name cannot be empty, stat on URL has no meaning.
 	if bucket == "" {
@@ -1589,6 +1591,7 @@ func (c *S3Client) Stat(ctx context.Context, opts StatOptions) (*ClientContent, 
 	}
 
 	if path == "" {
+		log.Println("BUCKET STAT")
 		content, err := c.bucketStat(ctx, bucket)
 		if err != nil {
 			return nil, err.Trace(bucket)
@@ -1598,6 +1601,7 @@ func (c *S3Client) Stat(ctx context.Context, opts StatOptions) (*ClientContent, 
 
 	// If the request is for incomplete upload stat, handle it here.
 	if opts.incomplete {
+		log.Println("INCOMPLETET")
 		return c.statIncompleteUpload(ctx, bucket, path)
 	}
 
@@ -1616,6 +1620,7 @@ func (c *S3Client) Stat(ctx context.Context, opts StatOptions) (*ClientContent, 
 		if opts.isZip {
 			o.Set("x-minio-extract", "true")
 		}
+		log.Println("GET OBJECT STATS")
 		ctnt, err := c.getObjectStat(ctx, bucket, path, o)
 		if err == nil {
 			return ctnt, nil
@@ -1630,6 +1635,7 @@ func (c *S3Client) Stat(ctx context.Context, opts StatOptions) (*ClientContent, 
 
 	nonRecursive := false
 	maxKeys := 1
+	log.Println("LIST OPTIONS")
 	for objectStat := range c.listObjectWrapper(ctx, bucket, path, nonRecursive, opts.timeRef, false, false, false, maxKeys, opts.isZip) {
 		if objectStat.Err != nil {
 			return nil, probe.NewError(objectStat.Err)
@@ -1649,6 +1655,7 @@ func (c *S3Client) Stat(ctx context.Context, opts StatOptions) (*ClientContent, 
 
 // getObjectStat returns the metadata of an object from a HEAD call.
 func (c *S3Client) getObjectStat(ctx context.Context, bucket, object string, opts minio.StatObjectOptions) (*ClientContent, *probe.Error) {
+	log.Println("GET OBJECT STTTTAAASTSTSTTSSTTSTST")
 	objectStat, e := c.api.StatObject(ctx, bucket, object, opts)
 	objectMetadata := c.objectInfo2ClientContent(bucket, objectStat)
 	if e != nil {
