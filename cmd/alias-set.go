@@ -23,6 +23,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -35,6 +36,7 @@ import (
 	"github.com/minio/mc/pkg/probe"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/pkg/v2/console"
+	"github.com/minio/pkg/v2/ellipses"
 	"golang.org/x/term"
 )
 
@@ -313,6 +315,9 @@ func mainAliasSet(cli *cli.Context, deprecated bool) error {
 		peerCert *x509.Certificate
 		err      *probe.Error
 	)
+
+	pattern, errx := ellipses.FindEllipsesPatterns(url)
+	log.Println(pattern, errx)
 
 	// Support deprecated lookup flag
 	if deprecated {

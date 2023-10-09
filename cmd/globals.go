@@ -79,6 +79,7 @@ var (
 	globalLimitDownload uint64
 
 	globalContext, globalCancel = context.WithCancel(context.Background())
+	// globalFallbackEnabledCommands = []string{"cp", "mv"}
 )
 
 var (

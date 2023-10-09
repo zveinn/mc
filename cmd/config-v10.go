@@ -39,6 +39,7 @@ var (
 // aliasConfig configuration of an alias.
 type aliasConfigV10 struct {
 	URL          string `json:"url"`
+	BackupURLs   string `json:"backupUrls,omitempty"`
 	AccessKey    string `json:"accessKey"`
 	SecretKey    string `json:"secretKey"`
 	SessionToken string `json:"sessionToken,omitempty"`

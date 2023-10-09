@@ -19,8 +19,10 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +37,7 @@ import (
 
 	"github.com/inconshreveable/mousetrap"
 	"github.com/minio/cli"
+	"github.com/minio/madmin-go/v3"
 	"github.com/minio/mc/pkg/probe"
 	"github.com/minio/minio-go/v7/pkg/set"
 	"github.com/minio/pkg/v2/console"
@@ -356,6 +359,70 @@ func installAutoCompletion() {
 	} else {
 		console.Infoln("enabled autocompletion in your '" + shellName + "' rc file. Please restart your shell.")
 	}
+}
+
+func healthCheckAllAliases(ctx context.Context, cli *cli.Context) {
+	sourceURLs := cli.Args()[:len(cli.Args())-1]
+	targetURL := cli.Args()[len(cli.Args())-1] // Last one is target
+	log.Println("BEFORE", cli.Args())
+
+	alias, alive := performAliasHealthCheck(ctx, cli, targetURL)
+	if !alive {
+		newAlias := alias + "_fallback_1"
+		replaceAliasWithBackup(ctx, cli, alias, newAlias)
+	}
+
+	for _, v := range sourceURLs {
+		alias, alive := performAliasHealthCheck(ctx, cli, v)
+		if !alive {
+			newAlias := alias + "_fallback_1"
+			replaceAliasWithBackup(ctx, cli, alias, newAlias)
+		}
+	}
+
+	log.Println("AFTER", cli.Args())
+
+}
+
+func performAliasHealthCheck(ctx context.Context, cli *cli.Context, url string) (alias string, alive bool) {
+
+	var err *probe.Error
+	var aliasCfg *aliasConfigV10
+	alias, _, aliasCfg, err = expandAlias(url)
+	fatalIf(err.Trace(url), "Unable to expand alias for "+url+"`.")
+
+	if aliasCfg == nil {
+		return "", true
+	}
+
+	anonClient, err := newAnonymousClient(alias)
+	fatalIf(err.Trace(url), "Unable to initialize anonymous client for `"+url+"`.")
+
+	select {
+	case result := <-anonClient.Alive(ctx, madmin.AliveOpts{}):
+		log.Println("RES:", result)
+		if result.Error != nil {
+			errorIf(err.Trace(url), "Unable to ping "+url+"`.")
+			return
+		}
+		alive = result.Online
+	case <-time.After(time.Second * 5):
+	}
+
+	return
+
+}
+
+func replaceAliasWithBackup(ctx context.Context, cli *cli.Context, oldAlias, newAlias string) {
+
+	args := cli.Args()
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], oldAlias) {
+			args[i] = strings.Replace(args[i], oldAlias, newAlias, 1)
+		}
+	}
+
+	return
 }
 
 func registerBefore(ctx *cli.Context) error {

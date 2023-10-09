@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -395,6 +396,7 @@ func doCopySession(ctx context.Context, cancelCopy context.CancelFunc, cli *cli.
 
 	sourceURLs := cli.Args()[:len(cli.Args())-1]
 	targetURL := cli.Args()[len(cli.Args())-1] // Last one is target
+	log.Println(sourceURLs, targetURL, "POST !!!")
 
 	// Check if the target path has object locking enabled
 	withLock, _ := isBucketLockEnabled(ctx, targetURL)
@@ -657,6 +659,8 @@ loop:
 func mainCopy(cliCtx *cli.Context) error {
 	ctx, cancelCopy := context.WithCancel(globalContext)
 	defer cancelCopy()
+
+	healthCheckAllAliases(ctx, cliCtx)
 
 	// Parse encryption keys per command.
 	encKeyDB, err := getEncKeys(cliCtx)
