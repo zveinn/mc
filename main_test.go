@@ -29,7 +29,12 @@ import (
 // 7. Validate file sizes + md5sums (TODO: md5sums need work)
 // 8. Validate file metadata
 // 9. validate file tags
-
+// 10. test creating invalid buckets
+// 11. test upload to unknown buckets
+//
+//
+//
+//
 // FULL LIST OF BASH TESTS
 //
 //  DONE  test_make_bucket
