@@ -39,7 +39,7 @@ import (
 // FULL LIST OF BASH TESTS
 //
 //  DONE test_make_bucket
-//	DONE test_make_bucket_error (needs to cover all failure cases)
+//	DONE test_make_bucket_error
 //  DONE test_rb
 //
 //  ???? test_list_dir (... we list alot ????)
@@ -193,86 +193,6 @@ func init() {
 	}
 }
 
-func CreateFile(nf newTestFile) {
-	newFile, err := os.CreateTemp("", nf.tag+"-mc-test-file-*"+nf.extension)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	md5Writer := md5.New()
-	for i := 0; i < nf.sizeInMBS; i++ {
-		n, err := newFile.Write(OneMBSlice[:])
-		mn, merr := md5Writer.Write(OneMBSlice[:])
-		if err != nil || merr != nil {
-			log.Println(err)
-			log.Println(merr)
-			return
-		}
-		if n != len(OneMBSlice) {
-			log.Println("Did not write 1MB to file")
-			return
-		}
-		if mn != len(OneMBSlice) {
-			log.Println("Did not write 1MB to md5sum writer")
-			return
-		}
-	}
-	splitName := strings.Split(newFile.Name(), string(os.PathSeparator))
-	fileNameWithoutPath := splitName[len(splitName)-1]
-	md5sum := fmt.Sprintf("%x", md5Writer.Sum(nil))
-	stats, err := newFile.Stat()
-	if err != nil {
-		return
-	}
-	FileMap[nf.tag] = &testFile{
-		md5Sum:              md5sum,
-		fileNameWithoutPath: fileNameWithoutPath,
-		file:                newFile,
-		stat:                stats,
-	}
-	FileMap[nf.tag].tag = nf.tag
-	FileMap[nf.tag].metaData = nf.metaData
-	FileMap[nf.tag].storageClass = nf.storageClass
-	FileMap[nf.tag].sizeInMBS = nf.sizeInMBS
-	FileMap[nf.tag].uploadShouldFail = nf.uploadShouldFail
-	FileMap[nf.tag].tags = nf.tags
-	FileMap[nf.tag].prefix = nf.prefix
-	FileMap[nf.tag].extension = nf.extension
-	if nf.prefix != "" {
-		FileMap[nf.tag].fileNameWithPrefix = nf.prefix + "/" + fileNameWithoutPath
-	} else {
-		FileMap[nf.tag].fileNameWithPrefix = fileNameWithoutPath
-	}
-	return
-}
-
-func BuildCLI() error {
-	out, err := exec.Command("go", "build", "../.").CombinedOutput()
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	log.Println(out)
-	return nil
-}
-
-func RunCommand(parameters ...string) (out string, err error) {
-	log.Println("EXEC |>", CMD, strings.Join(parameters, " "))
-	var outBytes []byte
-	var outErr error
-
-	if JSON_OutPut {
-		parameters = append([]string{JSON}, parameters...)
-		outBytes, outErr = exec.Command(CMD, parameters...).CombinedOutput()
-	} else {
-		outBytes, outErr = exec.Command(CMD, parameters...).CombinedOutput()
-	}
-
-	out = string(outBytes)
-	err = outErr
-	return
-}
-
 func Test_MakeBucketForTestSuite(t *testing.T) {
 	_, err := RunCommand("mb", ALIAS+"/"+BUCKET_ID)
 	fatalIfError(err, t)
@@ -281,10 +201,6 @@ func Test_MakeBucketForTestSuite(t *testing.T) {
 	if !strings.Contains(out, BUCKET_ID) {
 		t.Fatalf("Expected bucket (" + BUCKET_ID + ") to exist on the endpoint, but it did not.")
 	}
-}
-
-func Test_MakeAndRemoveBucketWithError(t *testing.T) {
-	// TODO: find all failure cases...
 }
 
 func Test_UploadAllFiles(t *testing.T) {
@@ -563,6 +479,19 @@ func Test_CreateBucketFailure(t *testing.T) {
 	}
 }
 
+func Test_RemoveBucketWithErrors(t *testing.T) {
+	randomID := uuid.NewString()
+	// TEST: Name too long
+	out, _ := RunCommand("rb", ALIAS+"/"+randomID+randomID)
+	errMSG, _ := parseSingleErrorMessageJSONOutput(out)
+	validateErrorMSGValues(t, errMSG, "error", "Unable to validate", "Bucket name cannot be longer than 63 characters")
+
+	// TEST: bucket does not exist
+	out, _ = RunCommand("rb", ALIAS+"/"+randomID)
+	errMSG, _ = parseSingleErrorMessageJSONOutput(out)
+	validateErrorMSGValues(t, errMSG, "error", "Unable to validate", "does not exist")
+}
+
 func Test_UploadToUnknownBucket(t *testing.T) {
 	randomBucketID := uuid.NewString()
 	parameters := append([]string{}, "cp", FileMap["1M"].file.Name(), ALIAS+"/"+randomBucketID+"-test-should-not-exist"+"/"+FileMap["1M"].fileNameWithoutPath)
@@ -729,14 +658,66 @@ func parseStatSingleObjectJSONOutput(out string) (stat statMessage, err error) {
 	return
 }
 
+// We have to wrap the error output because the console
+// printing mechanism for json marshals into an anonymous
+// object before printing
+// see cmd/error.go line 70
+type errorMessageWrapper struct {
+	Error  errorMessage `json:"error"`
+	Status string       `json:"status"`
+}
+
+func validateErrorMSGValues(
+	t *testing.T,
+	errMSG errorMessageWrapper,
+	TypeToValidate string,
+	MessageToValidate string,
+	CauseToValidate string,
+) {
+	// log.Println(errMSG)
+	// log.Println(errMSG.Status)              // error
+	// log.Println(errMSG.Error.Type)          // error
+	// log.Println(errMSG.Error.Cause.Message) // does not exist
+	// log.Println(errMSG.Error.Cause.Error)   // nil
+	// log.Println(errMSG.Error.Message)       // unable to validate
+	// log.Println(errMSG.Error.SysInfo)       // nothing
+	if TypeToValidate != "" {
+		if !strings.Contains(errMSG.Error.Type, TypeToValidate) {
+			t.Fatalf("Expected error.Error.Type to contain (%s) - but got (%s)", TypeToValidate, errMSG.Error.Type)
+		}
+	}
+	if MessageToValidate != "" {
+		if !strings.Contains(errMSG.Error.Message, MessageToValidate) {
+			t.Fatalf("Expected error.Error.Message to contain (%s) - but got (%s)", MessageToValidate, errMSG.Error.Message)
+		}
+	}
+	if CauseToValidate != "" {
+		if !strings.Contains(errMSG.Error.Cause.Message, CauseToValidate) {
+			t.Fatalf("Expected error.Error.Cause.Message to contain (%s) - but got (%s)", CauseToValidate, errMSG.Error.Cause.Message)
+		}
+	}
+}
+
+func parseSingleErrorMessageJSONOutput(out string) (errMSG errorMessageWrapper, err error) {
+	err = json.Unmarshal([]byte(out), &errMSG)
+	if err != nil {
+		return
+	}
+
+	fmt.Println("ERROR ------------------------------")
+	fmt.Println(errMSG)
+	fmt.Println(" ------------------------------")
+	return
+}
+
 type newTestFile struct {
-	tag              string
-	prefix           string
+	tag              string // The tag used to identify the file inside the FileMap. This tag is also used in the objects name.
+	prefix           string // Prefix for the object name ( not including the object name itself)
 	extension        string
-	metaData         map[string]string
 	storageClass     string
 	sizeInMBS        int
-	uploadShouldFail bool
+	uploadShouldFail bool // Set this to true if this file is used for detecting errors and should not be found after the upload phase
+	metaData         map[string]string
 	tags             map[string]string
 }
 type testFile struct {
@@ -752,5 +733,85 @@ type testFile struct {
 
 func (f *testFile) String() (out string) {
 	out = fmt.Sprintf("Size: %d || Name: %s || md5Sum: %s", f.stat.Size(), f.fileNameWithoutPath, f.md5Sum)
+	return
+}
+
+func CreateFile(nf newTestFile) {
+	newFile, err := os.CreateTemp("", nf.tag+"-mc-test-file-*"+nf.extension)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	md5Writer := md5.New()
+	for i := 0; i < nf.sizeInMBS; i++ {
+		n, err := newFile.Write(OneMBSlice[:])
+		mn, merr := md5Writer.Write(OneMBSlice[:])
+		if err != nil || merr != nil {
+			log.Println(err)
+			log.Println(merr)
+			return
+		}
+		if n != len(OneMBSlice) {
+			log.Println("Did not write 1MB to file")
+			return
+		}
+		if mn != len(OneMBSlice) {
+			log.Println("Did not write 1MB to md5sum writer")
+			return
+		}
+	}
+	splitName := strings.Split(newFile.Name(), string(os.PathSeparator))
+	fileNameWithoutPath := splitName[len(splitName)-1]
+	md5sum := fmt.Sprintf("%x", md5Writer.Sum(nil))
+	stats, err := newFile.Stat()
+	if err != nil {
+		return
+	}
+	FileMap[nf.tag] = &testFile{
+		md5Sum:              md5sum,
+		fileNameWithoutPath: fileNameWithoutPath,
+		file:                newFile,
+		stat:                stats,
+	}
+	FileMap[nf.tag].tag = nf.tag
+	FileMap[nf.tag].metaData = nf.metaData
+	FileMap[nf.tag].storageClass = nf.storageClass
+	FileMap[nf.tag].sizeInMBS = nf.sizeInMBS
+	FileMap[nf.tag].uploadShouldFail = nf.uploadShouldFail
+	FileMap[nf.tag].tags = nf.tags
+	FileMap[nf.tag].prefix = nf.prefix
+	FileMap[nf.tag].extension = nf.extension
+	if nf.prefix != "" {
+		FileMap[nf.tag].fileNameWithPrefix = nf.prefix + "/" + fileNameWithoutPath
+	} else {
+		FileMap[nf.tag].fileNameWithPrefix = fileNameWithoutPath
+	}
+	return
+}
+
+func BuildCLI() error {
+	out, err := exec.Command("go", "build", "../.").CombinedOutput()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	log.Println(out)
+	return nil
+}
+
+func RunCommand(parameters ...string) (out string, err error) {
+	log.Println("EXEC |>", CMD, strings.Join(parameters, " "))
+	var outBytes []byte
+	var outErr error
+
+	if JSON_OutPut {
+		parameters = append([]string{JSON}, parameters...)
+		outBytes, outErr = exec.Command(CMD, parameters...).CombinedOutput()
+	} else {
+		outBytes, outErr = exec.Command(CMD, parameters...).CombinedOutput()
+	}
+
+	out = string(outBytes)
+	err = outErr
 	return
 }
