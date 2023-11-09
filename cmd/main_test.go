@@ -674,13 +674,6 @@ func validateErrorMSGValues(
 	MessageToValidate string,
 	CauseToValidate string,
 ) {
-	// log.Println(errMSG)
-	// log.Println(errMSG.Status)              // error
-	// log.Println(errMSG.Error.Type)          // error
-	// log.Println(errMSG.Error.Cause.Message) // does not exist
-	// log.Println(errMSG.Error.Cause.Error)   // nil
-	// log.Println(errMSG.Error.Message)       // unable to validate
-	// log.Println(errMSG.Error.SysInfo)       // nothing
 	if TypeToValidate != "" {
 		if !strings.Contains(errMSG.Error.Type, TypeToValidate) {
 			t.Fatalf("Expected error.Error.Type to contain (%s) - but got (%s)", TypeToValidate, errMSG.Error.Type)
@@ -720,6 +713,7 @@ type newTestFile struct {
 	metaData         map[string]string
 	tags             map[string]string
 }
+
 type testFile struct {
 	newTestFile
 	LSOutput            contentMessage
