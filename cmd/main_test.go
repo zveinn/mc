@@ -126,62 +126,68 @@ func init() {
 
 	// CreateFile("0M", 0, "REDUCED_REDUNDANCY")
 	CreateFile(newTestFile{
-		tag:              "0M",
-		prefix:           "",
-		extension:        ".jpg",
-		storageClass:     "",
-		sizeInMBS:        0,
-		tags:             map[string]string{"name": "0M"},
-		uploadShouldFail: false,
+		tag:                "0M",
+		prefix:             "",
+		extension:          ".jpg",
+		storageClass:       "",
+		sizeInMBS:          0,
+		tags:               map[string]string{"name": "0M"},
+		uploadShouldFail:   false,
+		addToGlobalFileMap: true,
 	})
 	CreateFile(newTestFile{
-		tag:              "1M",
-		prefix:           "",
-		extension:        ".txt",
-		storageClass:     "REDUCED_REDUNDANCY",
-		sizeInMBS:        1,
-		metaData:         map[string]string{"name": "1M"},
-		tags:             map[string]string{"tag1": "1M-tag"},
-		uploadShouldFail: false,
+		tag:                "1M",
+		prefix:             "",
+		extension:          ".txt",
+		storageClass:       "REDUCED_REDUNDANCY",
+		sizeInMBS:          1,
+		metaData:           map[string]string{"name": "1M"},
+		tags:               map[string]string{"tag1": "1M-tag"},
+		uploadShouldFail:   false,
+		addToGlobalFileMap: true,
 	})
 	CreateFile(newTestFile{
-		tag:              "2M",
-		prefix:           "LVL1",
-		extension:        ".jpg",
-		storageClass:     "REDUCED_REDUNDANCY",
-		sizeInMBS:        2,
-		metaData:         map[string]string{"name": "2M"},
-		uploadShouldFail: false,
+		tag:                "2M",
+		prefix:             "LVL1",
+		extension:          ".jpg",
+		storageClass:       "REDUCED_REDUNDANCY",
+		sizeInMBS:          2,
+		metaData:           map[string]string{"name": "2M"},
+		uploadShouldFail:   false,
+		addToGlobalFileMap: true,
 	})
 	CreateFile(newTestFile{
-		tag:              "3M",
-		prefix:           "LVL1/LVL2",
-		extension:        ".png",
-		storageClass:     "",
-		sizeInMBS:        3,
-		metaData:         map[string]string{"name": "3M"},
-		uploadShouldFail: false,
+		tag:                "3M",
+		prefix:             "LVL1/LVL2",
+		extension:          ".png",
+		storageClass:       "",
+		sizeInMBS:          3,
+		metaData:           map[string]string{"name": "3M"},
+		uploadShouldFail:   false,
+		addToGlobalFileMap: true,
 	})
 	CreateFile(newTestFile{
-		tag:              "65M",
-		prefix:           "LVL1/LVL2/LVL3",
-		extension:        ".exe",
-		storageClass:     "",
-		sizeInMBS:        65,
-		metaData:         map[string]string{"name": "65M", "tag1": "value1"},
-		uploadShouldFail: false,
+		tag:                "65M",
+		prefix:             "LVL1/LVL2/LVL3",
+		extension:          ".exe",
+		storageClass:       "",
+		sizeInMBS:          65,
+		metaData:           map[string]string{"name": "65M", "tag1": "value1"},
+		uploadShouldFail:   false,
+		addToGlobalFileMap: true,
 	})
 
 	// ERROR FILES
 	// This file is used to trigger error cases
 	CreateFile(newTestFile{
-		tag:              "E1",
-		storageClass:     "UNKNOWN",
-		extension:        ".png",
-		sizeInMBS:        0,
-		metaData:         map[string]string{},
-		tags:             map[string]string{},
-		uploadShouldFail: true,
+		tag:                "E1",
+		storageClass:       "UNKNOWN",
+		extension:          ".png",
+		sizeInMBS:          0,
+		metaData:           map[string]string{},
+		tags:               map[string]string{},
+		uploadShouldFail:   true,
+		addToGlobalFileMap: true,
 	})
 
 	out, err := RunCommand(
@@ -330,14 +336,15 @@ func Test_MoveFile(t *testing.T) {
 	}()
 
 	file := CreateFile(newTestFile{
-		tag:              "10Move",
-		prefix:           "",
-		extension:        ".txt",
-		storageClass:     "",
-		sizeInMBS:        1,
-		metaData:         map[string]string{"name": "10Move"},
-		tags:             map[string]string{"tag1": "10Move-tag"},
-		uploadShouldFail: false,
+		tag:                "10Move",
+		prefix:             "",
+		extension:          ".txt",
+		storageClass:       "",
+		sizeInMBS:          1,
+		metaData:           map[string]string{"name": "10Move"},
+		tags:               map[string]string{"tag1": "10Move-tag"},
+		uploadShouldFail:   false,
+		addToGlobalFileMap: false,
 	})
 
 	out, err := RunCommand("mv", file.file.Name(), MV_BUCKET_PATH+"/"+file.fileNameWithoutPath)
@@ -885,6 +892,8 @@ type newTestFile struct {
 	uploadShouldFail bool // Set this to true if this file is used for detecting errors and should not be found after the upload phase
 	metaData         map[string]string
 	tags             map[string]string
+
+	addToGlobalFileMap bool
 }
 
 type testFile struct {
@@ -903,7 +912,7 @@ func (f *testFile) String() (out string) {
 	return
 }
 
-func CreateFile(nf newTestFile) *testFile {
+func CreateFile(nf newTestFile) (newTestFile *testFile) {
 	newFile, err := os.CreateTemp("", nf.tag+"-mc-test-file-*"+nf.extension)
 	if err != nil {
 		log.Println(err)
@@ -934,26 +943,29 @@ func CreateFile(nf newTestFile) *testFile {
 	if err != nil {
 		return nil
 	}
-	FileMap[nf.tag] = &testFile{
+	newTestFile = &testFile{
 		md5Sum:              md5sum,
 		fileNameWithoutPath: fileNameWithoutPath,
 		file:                newFile,
 		stat:                stats,
 	}
-	FileMap[nf.tag].tag = nf.tag
-	FileMap[nf.tag].metaData = nf.metaData
-	FileMap[nf.tag].storageClass = nf.storageClass
-	FileMap[nf.tag].sizeInMBS = nf.sizeInMBS
-	FileMap[nf.tag].uploadShouldFail = nf.uploadShouldFail
-	FileMap[nf.tag].tags = nf.tags
-	FileMap[nf.tag].prefix = nf.prefix
-	FileMap[nf.tag].extension = nf.extension
+	newTestFile.tag = nf.tag
+	newTestFile.metaData = nf.metaData
+	newTestFile.storageClass = nf.storageClass
+	newTestFile.sizeInMBS = nf.sizeInMBS
+	newTestFile.uploadShouldFail = nf.uploadShouldFail
+	newTestFile.tags = nf.tags
+	newTestFile.prefix = nf.prefix
+	newTestFile.extension = nf.extension
 	if nf.prefix != "" {
-		FileMap[nf.tag].fileNameWithPrefix = nf.prefix + "/" + fileNameWithoutPath
+		newTestFile.fileNameWithPrefix = nf.prefix + "/" + fileNameWithoutPath
 	} else {
-		FileMap[nf.tag].fileNameWithPrefix = fileNameWithoutPath
+		newTestFile.fileNameWithPrefix = fileNameWithoutPath
 	}
-	return FileMap[nf.tag]
+	if nf.addToGlobalFileMap {
+		FileMap[nf.tag] = newTestFile
+	}
+	return newTestFile
 }
 
 func BuildCLI() error {
