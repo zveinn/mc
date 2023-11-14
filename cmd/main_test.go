@@ -54,7 +54,7 @@ import (
 //  DONE test_get_object_multipart
 //  DONE test_find
 //  DONE  test_find_empty
-//    test_od_object
+//  DONE  test_od_object
 //    test_mv_object
 //    test_presigned_post_policy_error
 //    test_presigned_put_object
@@ -320,6 +320,53 @@ func X_OD(t *testing.T) {
 	}
 	if odMsg.PartSize != uint64(file.stat.Size())/10 {
 		t.Fatalf("Expected part size to be (%d) but got (%d)", file.stat.Size()/10, odMsg.PartSize)
+	}
+}
+
+func Test_MoveFile(t *testing.T) {
+	MV_BUCKET_PATH := CreateBucket(t)
+	defer func() {
+		RemoveBucket(t, MV_BUCKET_PATH)
+	}()
+
+	file := CreateFile(newTestFile{
+		tag:              "10Move",
+		prefix:           "",
+		extension:        ".txt",
+		storageClass:     "",
+		sizeInMBS:        1,
+		metaData:         map[string]string{"name": "10Move"},
+		tags:             map[string]string{"tag1": "10Move-tag"},
+		uploadShouldFail: false,
+	})
+
+	out, err := RunCommand("mv", file.file.Name(), MV_BUCKET_PATH+"/"+file.fileNameWithoutPath)
+	fatalIfError(err, t)
+	splitReturn := bytes.Split([]byte(out), []byte{10})
+
+	mvMSG, err := parseSingleCPMessageJSONOutput(string(splitReturn[0]))
+	fatalIfError(err, t)
+	if mvMSG.TotalCount != 1 {
+		t.Fatalf("Expected count to be 1 but got (%d)", mvMSG.TotalCount)
+	}
+	if mvMSG.Size != file.stat.Size() {
+		t.Fatalf("Expected size to be (%d) but got (%d)", file.stat.Size(), mvMSG.Size)
+	}
+	if mvMSG.Status != "success" {
+		t.Fatalf("Expected status to be (success) but got (%s)", mvMSG.Status)
+	}
+
+	statMSG, err := parseSingleAccountStatJSONOutput(string(splitReturn[1]))
+	fatalIfError(err, t)
+	fmt.Println(statMSG)
+	if statMSG.Transferred != file.stat.Size() {
+		t.Fatalf("Expected transfeered to be (%d) but got (%d)", file.stat.Size(), statMSG.Transferred)
+	}
+	if statMSG.Total != file.stat.Size() {
+		t.Fatalf("Expected total to be (%d) but got (%d)", file.stat.Size(), statMSG.Total)
+	}
+	if statMSG.Status != "success" {
+		t.Fatalf("Expected status to be (success) but got (%s)", statMSG.Status)
 	}
 }
 
@@ -808,9 +855,24 @@ func parseSingleODMessageJSONOutput(out string) (odMSG odMessage, err error) {
 		return
 	}
 
-	fmt.Println("OD ------------------------------")
-	fmt.Println(odMSG)
-	fmt.Println(" ------------------------------")
+	return
+}
+
+func parseSingleAccountStatJSONOutput(out string) (stat accountStat, err error) {
+	err = json.Unmarshal([]byte(out), &stat)
+	if err != nil {
+		return
+	}
+
+	return
+}
+
+func parseSingleCPMessageJSONOutput(out string) (cpMSG copyMessage, err error) {
+	err = json.Unmarshal([]byte(out), &cpMSG)
+	if err != nil {
+		return
+	}
+
 	return
 }
 
@@ -841,11 +903,11 @@ func (f *testFile) String() (out string) {
 	return
 }
 
-func CreateFile(nf newTestFile) {
+func CreateFile(nf newTestFile) *testFile {
 	newFile, err := os.CreateTemp("", nf.tag+"-mc-test-file-*"+nf.extension)
 	if err != nil {
 		log.Println(err)
-		return
+		return nil
 	}
 	md5Writer := md5.New()
 	for i := 0; i < nf.sizeInMBS; i++ {
@@ -854,15 +916,15 @@ func CreateFile(nf newTestFile) {
 		if err != nil || merr != nil {
 			log.Println(err)
 			log.Println(merr)
-			return
+			return nil
 		}
 		if n != len(OneMBSlice) {
 			log.Println("Did not write 1MB to file")
-			return
+			return nil
 		}
 		if mn != len(OneMBSlice) {
 			log.Println("Did not write 1MB to md5sum writer")
-			return
+			return nil
 		}
 	}
 	splitName := strings.Split(newFile.Name(), string(os.PathSeparator))
@@ -870,7 +932,7 @@ func CreateFile(nf newTestFile) {
 	md5sum := fmt.Sprintf("%x", md5Writer.Sum(nil))
 	stats, err := newFile.Stat()
 	if err != nil {
-		return
+		return nil
 	}
 	FileMap[nf.tag] = &testFile{
 		md5Sum:              md5sum,
@@ -891,7 +953,7 @@ func CreateFile(nf newTestFile) {
 	} else {
 		FileMap[nf.tag].fileNameWithPrefix = fileNameWithoutPath
 	}
-	return
+	return FileMap[nf.tag]
 }
 
 func BuildCLI() error {
