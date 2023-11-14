@@ -88,9 +88,9 @@ import (
 
 var (
 	OneMBSlice [1048576]byte
-	BUCKET_ID  = "mc-gh-actions-test-" + uuid.NewString()
 	ALIAS      = "play"
 	FileMap    = make(map[string]*testFile)
+	// BUCKET_ID  = ""
 )
 
 func GetMBSizeInBytes(MB int) int64 {
@@ -107,6 +107,11 @@ const (
 	SERVER_ENDPOINT = "play.min.io"
 	ACCESS_KEY      = "Q3AM3UQ867SPQQA43P2F"
 	SECRET_KEY      = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
+)
+
+// Dynamic testing variables
+var (
+	CP_TEST_BUCKET string = ""
 )
 
 func init() {
@@ -193,17 +198,35 @@ func init() {
 	}
 }
 
-func Test_MakeBucketForTestSuite(t *testing.T) {
-	_, err := RunCommand("mb", ALIAS+"/"+BUCKET_ID)
-	fatalIfError(err, t)
-	out, err := RunCommand("ls", ALIAS)
-	fatalIfError(err, t)
-	if !strings.Contains(out, BUCKET_ID) {
-		t.Fatalf("Expected bucket (" + BUCKET_ID + ") to exist on the endpoint, but it did not.")
+func RemoveBucket(t *testing.T, path string) {
+	out, err := RunCommand("rb", "--force", path)
+	if err != nil {
+		t.Fatalf("Unable to remove bucket bucket (%s) err: %s", path, string(out))
+		return
 	}
 }
 
-func Test_UploadAllFiles(t *testing.T) {
+func CreateBucket(t *testing.T) (bucketPath string) {
+	bucketName := "mc-gh-actions-test-" + uuid.NewString()
+	bucketPath = ALIAS + "/" + bucketName
+	out, err := RunCommand("mb", bucketPath)
+	if err != nil {
+		t.Fatalf("Unable to create bucket (%s) err: %s", bucketPath, string(out))
+		return
+	}
+	out, err = RunCommand("ls", ALIAS)
+	if err != nil {
+		t.Fatalf("Unable to ls alias (%s) err: %s", ALIAS, string(out))
+		return
+	}
+	if !strings.Contains(out, bucketName) {
+		t.Fatalf("LS output does not contain bucket name (%s)", bucketName)
+	}
+	return
+}
+
+func Test_CPAllFiles(t *testing.T) {
+	CP_TEST_BUCKET = CreateBucket(t)
 	for _, v := range FileMap {
 		parameters := make([]string, 0)
 		parameters = append(parameters, "cp")
@@ -236,12 +259,12 @@ func Test_UploadAllFiles(t *testing.T) {
 		if v.prefix != "" {
 			parameters = append(
 				parameters,
-				ALIAS+"/"+BUCKET_ID+"/"+v.fileNameWithPrefix,
+				CP_TEST_BUCKET+"/"+v.fileNameWithPrefix,
 			)
 		} else {
 			parameters = append(
 				parameters,
-				ALIAS+"/"+BUCKET_ID+"/"+v.fileNameWithoutPath,
+				CP_TEST_BUCKET+"/"+v.fileNameWithoutPath,
 			)
 		}
 
@@ -254,8 +277,58 @@ func Test_UploadAllFiles(t *testing.T) {
 	}
 }
 
+func X_OD(t *testing.T) {
+	TEST_BUCKET_PATH := CreateBucket(t)
+
+	defer func() {
+		RemoveBucket(t, TEST_BUCKET_PATH)
+	}()
+
+	file := FileMap["65M"]
+	out, err := RunCommand("od", "if="+file.file.Name(), "of="+TEST_BUCKET_PATH+"/od/"+file.fileNameWithoutPath, "parts=10")
+	fatalIfError(err, t)
+	odMsg, err := parseSingleODMessageJSONOutput(out)
+	fatalIfError(err, t)
+
+	if odMsg.TotalSize != file.stat.Size() {
+		t.Fatalf("Expected (%d) bytes to be uploaded but only uploaded (%d) bytes", odMsg.TotalSize, file.stat.Size())
+	}
+	if odMsg.Parts != 10 {
+		t.Fatalf("Expected upload parts to be (10) but they were (%d)", odMsg.Parts)
+	}
+	if odMsg.Type != "FStoS3" {
+		t.Fatalf("Expected type to be (FStoS3) but got (%s)", odMsg.Type)
+	}
+	if odMsg.PartSize != uint64(file.stat.Size())/10 {
+		t.Fatalf("Expected part size to be (%d) but got (%d)", file.stat.Size()/10, odMsg.PartSize)
+	}
+
+	out, err = RunCommand("od", "of="+file.file.Name(), "if="+TEST_BUCKET_PATH+"/od/"+file.fileNameWithoutPath, "parts=10")
+	fatalIfError(err, t)
+	fmt.Println(string(out))
+	odMsg, err = parseSingleODMessageJSONOutput(out)
+	fatalIfError(err, t)
+
+	if odMsg.TotalSize != file.stat.Size() {
+		t.Fatalf("Expected (%d) bytes to be uploaded but only uploaded (%d) bytes", odMsg.TotalSize, file.stat.Size())
+	}
+	if odMsg.Parts != 10 {
+		t.Fatalf("Expected upload parts to be (10) but they were (%d)", odMsg.Parts)
+	}
+	if odMsg.Type != "S3toFS" {
+		t.Fatalf("Expected type to be (FStoS3) but got (%s)", odMsg.Type)
+	}
+	if odMsg.PartSize != uint64(file.stat.Size())/10 {
+		t.Fatalf("Expected part size to be (%d) but got (%d)", file.stat.Size()/10, odMsg.PartSize)
+	}
+}
+
 func Test_LSObjectsAndSaveResults(t *testing.T) {
-	out, err := RunCommand("ls", "-r", ALIAS+"/"+BUCKET_ID)
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
+	out, err := RunCommand("ls", "-r", CP_TEST_BUCKET)
 	fatalIfError(err, t)
 
 	fileList, err := parseLSJSONOutput(out)
@@ -280,11 +353,15 @@ func Test_LSObjectsAndSaveResults(t *testing.T) {
 }
 
 func Test_StatObjecstsAndSaveResults(t *testing.T) {
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
 	for i, v := range FileMap {
 		if v.uploadShouldFail {
 			continue
 		}
-		out, err := RunCommand("stat", ALIAS+"/"+BUCKET_ID+"/"+v.fileNameWithPrefix)
+		out, err := RunCommand("stat", CP_TEST_BUCKET+"/"+v.fileNameWithPrefix)
 		fatalIfError(err, t)
 		FileMap[i].MinIOStat, err = parseStatSingleObjectJSONOutput(out)
 		if FileMap[i].MinIOStat.Key == "" {
@@ -295,6 +372,10 @@ func Test_StatObjecstsAndSaveResults(t *testing.T) {
 }
 
 func Test_ValidateFileMetaDataPostUpload(t *testing.T) {
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
 	for _, f := range FileMap {
 		if f.uploadShouldFail {
 			continue
@@ -306,7 +387,11 @@ func Test_ValidateFileMetaDataPostUpload(t *testing.T) {
 }
 
 func Test_FindObjects(t *testing.T) {
-	out, err := RunCommand("find", ALIAS+"/"+BUCKET_ID)
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
+	out, err := RunCommand("find", CP_TEST_BUCKET)
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
@@ -329,11 +414,15 @@ func Test_FindObjects(t *testing.T) {
 }
 
 func Test_FindObjectsFullName(t *testing.T) {
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
 	for _, v := range FileMap {
 		if v.uploadShouldFail {
 			continue
 		}
-		out, err := RunCommand("find", ALIAS+"/"+BUCKET_ID, "--name", v.fileNameWithoutPath)
+		out, err := RunCommand("find", CP_TEST_BUCKET, "--name", v.fileNameWithoutPath)
 		fatalIfError(err, t)
 		info, err := parseFindSingleObjectJSONOutput(out)
 		fatalIfError(err, t)
@@ -344,7 +433,11 @@ func Test_FindObjectsFullName(t *testing.T) {
 }
 
 func Test_FindObjectsNameFilterTxtFile(t *testing.T) {
-	out, err := RunCommand("find", ALIAS+"/"+BUCKET_ID, "--name", "*.txt")
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
+	out, err := RunCommand("find", CP_TEST_BUCKET, "--name", "*.txt")
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
@@ -367,12 +460,15 @@ func Test_FindObjectsNameFilterTxtFile(t *testing.T) {
 }
 
 func Test_FindObjectsLargerThan(t *testing.T) {
-	out, err := RunCommand("find", ALIAS+"/"+BUCKET_ID, "--larger", "64MB")
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
+	out, err := RunCommand("find", CP_TEST_BUCKET, "--larger", "64MB")
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
 	for _, v := range FileMap {
-		log.Println("SIZES: ", v.stat.Size(), GetMBSizeInBytes(64))
 		if v.uploadShouldFail || v.stat.Size() < GetMBSizeInBytes(64) {
 			continue
 		}
@@ -391,7 +487,11 @@ func Test_FindObjectsLargerThan(t *testing.T) {
 }
 
 func Test_FindObjectsOlderThan1d(t *testing.T) {
-	out, err := RunCommand("find", ALIAS+"/"+BUCKET_ID, "--older-than", "1d")
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
+	out, err := RunCommand("find", CP_TEST_BUCKET, "--older-than", "1d")
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
@@ -401,7 +501,11 @@ func Test_FindObjectsOlderThan1d(t *testing.T) {
 }
 
 func Test_FindObjectsNewerThen1d(t *testing.T) {
-	out, err := RunCommand("find", ALIAS+"/"+BUCKET_ID, "--newer-than", "1d")
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
+	out, err := RunCommand("find", CP_TEST_BUCKET, "--newer-than", "1d")
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
@@ -424,6 +528,10 @@ func Test_FindObjectsNewerThen1d(t *testing.T) {
 }
 
 func Test_GetObjects(t *testing.T) {
+	if CP_TEST_BUCKET == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
 	for _, v := range FileMap {
 		if v.uploadShouldFail {
 			continue
@@ -431,7 +539,7 @@ func Test_GetObjects(t *testing.T) {
 		// make sure old downloads are not in our way
 		_ = os.Remove(os.TempDir() + "/" + v.fileNameWithoutPath + ".downloaded")
 
-		_, err := RunCommand("cp", ALIAS+"/"+BUCKET_ID+"/"+v.fileNameWithPrefix, os.TempDir()+"/"+v.fileNameWithoutPath+".downloaded")
+		_, err := RunCommand("cp", CP_TEST_BUCKET+"/"+v.fileNameWithPrefix, os.TempDir()+"/"+v.fileNameWithoutPath+".downloaded")
 		fatalIfError(err, t)
 
 		downloadedFile, err := os.Open(os.TempDir() + "/" + v.fileNameWithoutPath + ".downloaded")
@@ -502,17 +610,8 @@ func Test_UploadToUnknownBucket(t *testing.T) {
 	}
 }
 
-func Test_RemoveBucketUsedForTestSuite(t *testing.T) {
-	_, err := RunCommand("rb", ALIAS+"/"+BUCKET_ID, "--force")
-	fatalIfError(err, t)
-	out, err := RunCommand("ls", ALIAS)
-	fatalIfError(err, t)
-	if strings.Contains(out, BUCKET_ID) {
-		t.Fatalf("Expected bucket (" + BUCKET_ID + ") to NOT exist on the endpoint, but it did not.")
-	}
-}
-
-func Test_RemoveFilesPostTesting(_ *testing.T) {
+func Test_CLEANUP(t *testing.T) {
+	RemoveBucket(t, CP_TEST_BUCKET)
 	for _, v := range FileMap {
 		_ = os.Remove(v.file.Name())
 		if !v.uploadShouldFail {
@@ -699,6 +798,18 @@ func parseSingleErrorMessageJSONOutput(out string) (errMSG errorMessageWrapper, 
 
 	fmt.Println("ERROR ------------------------------")
 	fmt.Println(errMSG)
+	fmt.Println(" ------------------------------")
+	return
+}
+
+func parseSingleODMessageJSONOutput(out string) (odMSG odMessage, err error) {
+	err = json.Unmarshal([]byte(out), &odMSG)
+	if err != nil {
+		return
+	}
+
+	fmt.Println("OD ------------------------------")
+	fmt.Println(odMSG)
 	fmt.Println(" ------------------------------")
 	return
 }
