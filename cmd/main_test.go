@@ -20,22 +20,6 @@ import (
 // This test suite is designed to mimick the functional-tests.sh suite.
 // We want to slowly re-write the bash test to golang.
 //
-// Test Suite Flow:
-// 1. Set aliases
-// 2. Create base bucket for test suite
-// 3. Upload 0MB file
-// 4. Upload 1MB file
-// 5. Upload 65MB file - this triggers multipart
-// 6. Upload Broken file
-// 7. Validate file sizes + md5sums (TODO: md5sums need work)
-// 8. Validate file metadata
-// 9. validate file tags
-// 10. test creating invalid buckets
-// 11. test upload to unknown buckets
-//
-//
-//
-//
 // FULL LIST OF BASH TESTS
 //
 //  DONE test_make_bucket
@@ -55,7 +39,7 @@ import (
 //  DONE test_find
 //  DONE  test_find_empty
 //  DONE  test_od_object
-//    test_mv_object
+//  DONE  test_mv_object
 //    test_presigned_post_policy_error
 //    test_presigned_put_object
 //    test_presigned_get_object
@@ -125,7 +109,7 @@ func init() {
 	}
 
 	// CreateFile("0M", 0, "REDUCED_REDUNDANCY")
-	CreateFile(newTestFile{
+	createFile(newTestFile{
 		tag:                "0M",
 		prefix:             "",
 		extension:          ".jpg",
@@ -135,7 +119,7 @@ func init() {
 		uploadShouldFail:   false,
 		addToGlobalFileMap: true,
 	})
-	CreateFile(newTestFile{
+	createFile(newTestFile{
 		tag:                "1M",
 		prefix:             "",
 		extension:          ".txt",
@@ -146,7 +130,7 @@ func init() {
 		uploadShouldFail:   false,
 		addToGlobalFileMap: true,
 	})
-	CreateFile(newTestFile{
+	createFile(newTestFile{
 		tag:                "2M",
 		prefix:             "LVL1",
 		extension:          ".jpg",
@@ -156,7 +140,7 @@ func init() {
 		uploadShouldFail:   false,
 		addToGlobalFileMap: true,
 	})
-	CreateFile(newTestFile{
+	createFile(newTestFile{
 		tag:                "3M",
 		prefix:             "LVL1/LVL2",
 		extension:          ".png",
@@ -166,7 +150,7 @@ func init() {
 		uploadShouldFail:   false,
 		addToGlobalFileMap: true,
 	})
-	CreateFile(newTestFile{
+	createFile(newTestFile{
 		tag:                "65M",
 		prefix:             "LVL1/LVL2/LVL3",
 		extension:          ".exe",
@@ -179,7 +163,7 @@ func init() {
 
 	// ERROR FILES
 	// This file is used to trigger error cases
-	CreateFile(newTestFile{
+	createFile(newTestFile{
 		tag:                "E1",
 		storageClass:       "UNKNOWN",
 		extension:          ".png",
@@ -335,7 +319,7 @@ func Test_MoveFile(t *testing.T) {
 		RemoveBucket(t, MV_BUCKET_PATH)
 	}()
 
-	file := CreateFile(newTestFile{
+	file := createFile(newTestFile{
 		tag:                "10Move",
 		prefix:             "",
 		extension:          ".txt",
@@ -912,7 +896,7 @@ func (f *testFile) String() (out string) {
 	return
 }
 
-func CreateFile(nf newTestFile) (newTestFile *testFile) {
+func createFile(nf newTestFile) (newTestFile *testFile) {
 	newFile, err := os.CreateTemp("", nf.tag+"-mc-test-file-*"+nf.extension)
 	if err != nil {
 		log.Println(err)
