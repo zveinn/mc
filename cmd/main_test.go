@@ -217,6 +217,7 @@ func Test_FullSuite(t *testing.T) {
 	// ValidateFileMetaDataPostUpload validates the output of LS and Stat
 	ValidateFileMetaData(t)
 
+	// The following tests rely on files uploaded via (uploadAllFiles)
 	// OD(t)
 	FindObjects(t)
 	FindObjectsUsingName(t)
