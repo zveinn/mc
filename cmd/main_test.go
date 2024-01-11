@@ -98,6 +98,7 @@ var (
 	CP_TEST_BUCKET string = ""
 )
 
+// TODO: refactor into test main + test cleanup !
 func init() {
 	err := BuildCLI()
 	if err != nil {
