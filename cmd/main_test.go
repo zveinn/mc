@@ -8,19 +8,22 @@ import (
 	"io"
 	"log"
 	"math/rand"
-	"mime"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
 
+// HOW TO RUN: go test -v ./... -run Test_FullSuite
+//
+//
 // This test suite is designed to mimick the functional-tests.sh suite.
 // We want to slowly re-write the bash test to golang.
 //
-// FULL LIST OF BASH TESTS
+// FULL LIST OF BASH TESTS from functional-tests.sh
 //
 //  DONE test_make_bucket
 //	DONE test_make_bucket_error
@@ -71,38 +74,51 @@ import (
 //    teardown
 
 var (
-	OneMBSlice [1048576]byte
-	ALIAS      = "play"
-	FileMap    = make(map[string]*testFile)
-	// BUCKET_ID  = ""
+	OneMBSlice          [1048576]byte // 1x Mebibyte
+	ALIAS               = "play"
+	FileMap             = make(map[string]*testFile)
+	RANDOM_LARGE_STRING = "lksdjfljsdklfjklsdjfklksjdf;lsjdk;fjks;djflsdlfkjskldjfklkljsdfljsldkfjklsjdfkljsdklfjklsdjflksjdlfjsdjflsjdflsldfjlsjdflksjdflkjslkdjflksfdj"
+	JSON                = "--json"
+	JSONOutput          = true
+	CMD                 = "../mc"
+	MetaPrefix          = "X-Amz-Meta-"
+
+	ServerEndpoint = "play.min.io"
+	AcessKey       = "Q3AM3UQ867SPQQA43P2F"
+	SecretKey      = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
+	SkipBuild      = false
+	MainTestBucket string
 )
 
 func GetMBSizeInBytes(MB int) int64 {
 	return int64(MB * len(OneMBSlice))
 }
 
-const (
-	RANDOM_LARGE_STRING = "lksdjfljsdklfjklsdjfklksjdf;lsjdk;fjks;djflsdlfkjskldjfklkljsdfljsldkfjklsjdfkljsdklfjklsdjflksjdlfjsdjflsjdflsldfjlsjdflksjdflkjslkdjflksfdj"
-	JSON                = "--json"
-	JSON_OutPut         = true
-	CMD                 = "../mc"
-	META_PREFIX         = "X-Amz-Meta-"
+func initializeTestSuite() {
+	shouldSkipBuild := os.Getenv("SKIP_BUILD")
+	shouldSkipBool, _ := strconv.ParseBool(shouldSkipBuild)
+	if !shouldSkipBool {
+		err := BuildCLI()
+		if err != nil {
+			os.Exit(1)
+		}
+	}
 
-	SERVER_ENDPOINT = "play.min.io"
-	ACCESS_KEY      = "Q3AM3UQ867SPQQA43P2F"
-	SECRET_KEY      = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
-)
-
-// Dynamic testing variables
-var (
-	CP_TEST_BUCKET string = ""
-)
-
-// TODO: refactor into test main + test cleanup !
-func init() {
-	err := BuildCLI()
-	if err != nil {
-		os.Exit(1)
+	envSecretKey := os.Getenv("SECRET_KEY")
+	if envSecretKey != "" {
+		SecretKey = envSecretKey
+	}
+	envAccessKey := os.Getenv("ACCESS_KEY")
+	if envAccessKey != "" {
+		AcessKey = envAccessKey
+	}
+	envServerEndpoint := os.Getenv("SERVER_ENDPOINT")
+	if envServerEndpoint != "" {
+		ServerEndpoint = envServerEndpoint
+	}
+	envCMD := os.Getenv("CMD")
+	if envCMD != "" {
+		CMD = envCMD
 	}
 
 	for i := 0; i < len(OneMBSlice); i++ {
@@ -179,9 +195,9 @@ func init() {
 		"alias",
 		"set",
 		ALIAS,
-		"https://"+SERVER_ENDPOINT,
-		ACCESS_KEY,
-		SECRET_KEY,
+		"https://"+ServerEndpoint,
+		AcessKey,
+		SecretKey,
 	)
 	if err != nil {
 		log.Println(out)
@@ -189,8 +205,40 @@ func init() {
 	}
 }
 
+func Test_FullSuite(t *testing.T) {
+	// initializeTestSuite builds the mc client and creates local files which are used for testing
+	initializeTestSuite()
+	// uploadAllFiles uploads all files in FileMap to CP_TEST_BUCKET
+	uploadAllFiles(t)
+	// LSObjects saves the output of LS inside *testFile in FileMap
+	LSObjects(t)
+	// StatObjecsts saves the output of Stat inside *testFile in FileMap
+	StatObjecsts(t)
+	// ValidateFileMetaDataPostUpload validates the output of LS and Stat
+	ValidateFileMetaData(t)
+
+	// OD(t)
+	FindObjects(t)
+	FindObjectsUsingName(t)
+	FindObjectsUsingNameAndFilteringForTxtType(t)
+	FindObjectsLargerThan64Mebibytes(t)
+	FindObjectsSmallerThan64Mebibytes(t)
+	FindObjectsOlderThan1d(t)
+	FindObjectsNewerThen1d(t)
+	GetObjectsAndCompareMD5(t)
+	CreateBucketUsingInvalidSymbols(t)
+	RemoveBucketWithNameTooLong(t)
+	RemoveBucketThatDoesNotExist(t)
+
+	// This function cleans up the test suite
+	CLEANUP(t)
+
+	// Independent tests
+	MoveFileDiskToMinio(t)
+}
+
 func RemoveBucket(t *testing.T, path string) {
-	out, err := RunCommand("rb", "--force", path)
+	out, err := RunCommand("rb", "--force", "--dangerous", path)
 	if err != nil {
 		t.Fatalf("Unable to remove bucket bucket (%s) err: %s", path, string(out))
 		return
@@ -216,8 +264,9 @@ func CreateBucket(t *testing.T) (bucketPath string) {
 	return
 }
 
-func Test_CPAllFiles(t *testing.T) {
-	CP_TEST_BUCKET = CreateBucket(t)
+func uploadAllFiles(t *testing.T) {
+	MainTestBucket = CreateBucket(t)
+
 	for _, v := range FileMap {
 		parameters := make([]string, 0)
 		parameters = append(parameters, "cp")
@@ -245,17 +294,17 @@ func Test_CPAllFiles(t *testing.T) {
 			parameters = append(parameters, tags)
 		}
 
-		parameters = append(parameters, v.file.Name())
+		parameters = append(parameters, v.diskFile.Name())
 
 		if v.prefix != "" {
 			parameters = append(
 				parameters,
-				CP_TEST_BUCKET+"/"+v.fileNameWithPrefix,
+				MainTestBucket+"/"+v.fileNameWithPrefix,
 			)
 		} else {
 			parameters = append(
 				parameters,
-				CP_TEST_BUCKET+"/"+v.fileNameWithoutPath,
+				MainTestBucket+"/"+v.fileNameWithoutPath,
 			)
 		}
 
@@ -268,21 +317,21 @@ func Test_CPAllFiles(t *testing.T) {
 	}
 }
 
-func X_OD(t *testing.T) {
-	TEST_BUCKET_PATH := CreateBucket(t)
+func OD(t *testing.T) {
+	LocalBucketPath := CreateBucket(t)
 
 	defer func() {
-		RemoveBucket(t, TEST_BUCKET_PATH)
+		RemoveBucket(t, LocalBucketPath)
 	}()
 
 	file := FileMap["65M"]
-	out, err := RunCommand("od", "if="+file.file.Name(), "of="+TEST_BUCKET_PATH+"/od/"+file.fileNameWithoutPath, "parts=10")
+	out, err := RunCommand("od", "if="+file.diskFile.Name(), "of="+LocalBucketPath+"/od/"+file.fileNameWithoutPath, "parts=10")
 	fatalIfError(err, t)
 	odMsg, err := parseSingleODMessageJSONOutput(out)
 	fatalIfError(err, t)
 
-	if odMsg.TotalSize != file.stat.Size() {
-		t.Fatalf("Expected (%d) bytes to be uploaded but only uploaded (%d) bytes", odMsg.TotalSize, file.stat.Size())
+	if odMsg.TotalSize != file.diskStat.Size() {
+		t.Fatalf("Expected (%d) bytes to be uploaded but only uploaded (%d) bytes", odMsg.TotalSize, file.diskStat.Size())
 	}
 	if odMsg.Parts != 10 {
 		t.Fatalf("Expected upload parts to be (10) but they were (%d)", odMsg.Parts)
@@ -290,18 +339,18 @@ func X_OD(t *testing.T) {
 	if odMsg.Type != "FStoS3" {
 		t.Fatalf("Expected type to be (FStoS3) but got (%s)", odMsg.Type)
 	}
-	if odMsg.PartSize != uint64(file.stat.Size())/10 {
-		t.Fatalf("Expected part size to be (%d) but got (%d)", file.stat.Size()/10, odMsg.PartSize)
+	if odMsg.PartSize != uint64(file.diskStat.Size())/10 {
+		t.Fatalf("Expected part size to be (%d) but got (%d)", file.diskStat.Size()/10, odMsg.PartSize)
 	}
 
-	out, err = RunCommand("od", "of="+file.file.Name(), "if="+TEST_BUCKET_PATH+"/od/"+file.fileNameWithoutPath, "parts=10")
+	out, err = RunCommand("od", "of="+file.diskFile.Name(), "if="+LocalBucketPath+"/od/"+file.fileNameWithoutPath, "parts=10")
 	fatalIfError(err, t)
 	fmt.Println(string(out))
 	odMsg, err = parseSingleODMessageJSONOutput(out)
 	fatalIfError(err, t)
 
-	if odMsg.TotalSize != file.stat.Size() {
-		t.Fatalf("Expected (%d) bytes to be uploaded but only uploaded (%d) bytes", odMsg.TotalSize, file.stat.Size())
+	if odMsg.TotalSize != file.diskStat.Size() {
+		t.Fatalf("Expected (%d) bytes to be uploaded but only uploaded (%d) bytes", odMsg.TotalSize, file.diskStat.Size())
 	}
 	if odMsg.Parts != 10 {
 		t.Fatalf("Expected upload parts to be (10) but they were (%d)", odMsg.Parts)
@@ -309,15 +358,15 @@ func X_OD(t *testing.T) {
 	if odMsg.Type != "S3toFS" {
 		t.Fatalf("Expected type to be (FStoS3) but got (%s)", odMsg.Type)
 	}
-	if odMsg.PartSize != uint64(file.stat.Size())/10 {
-		t.Fatalf("Expected part size to be (%d) but got (%d)", file.stat.Size()/10, odMsg.PartSize)
+	if odMsg.PartSize != uint64(file.diskStat.Size())/10 {
+		t.Fatalf("Expected part size to be (%d) but got (%d)", file.diskStat.Size()/10, odMsg.PartSize)
 	}
 }
 
-func Test_MoveFile(t *testing.T) {
-	MV_BUCKET_PATH := CreateBucket(t)
+func MoveFileDiskToMinio(t *testing.T) {
+	LocalBucketPath := CreateBucket(t)
 	defer func() {
-		RemoveBucket(t, MV_BUCKET_PATH)
+		RemoveBucket(t, LocalBucketPath)
 	}()
 
 	file := createFile(newTestFile{
@@ -332,7 +381,7 @@ func Test_MoveFile(t *testing.T) {
 		addToGlobalFileMap: false,
 	})
 
-	out, err := RunCommand("mv", file.file.Name(), MV_BUCKET_PATH+"/"+file.fileNameWithoutPath)
+	out, err := RunCommand("mv", file.diskFile.Name(), LocalBucketPath+"/"+file.fileNameWithoutPath)
 	fatalIfError(err, t)
 	splitReturn := bytes.Split([]byte(out), []byte{10})
 
@@ -341,8 +390,8 @@ func Test_MoveFile(t *testing.T) {
 	if mvMSG.TotalCount != 1 {
 		t.Fatalf("Expected count to be 1 but got (%d)", mvMSG.TotalCount)
 	}
-	if mvMSG.Size != file.stat.Size() {
-		t.Fatalf("Expected size to be (%d) but got (%d)", file.stat.Size(), mvMSG.Size)
+	if mvMSG.Size != file.diskStat.Size() {
+		t.Fatalf("Expected size to be (%d) but got (%d)", file.diskStat.Size(), mvMSG.Size)
 	}
 	if mvMSG.Status != "success" {
 		t.Fatalf("Expected status to be (success) but got (%s)", mvMSG.Status)
@@ -351,23 +400,23 @@ func Test_MoveFile(t *testing.T) {
 	statMSG, err := parseSingleAccountStatJSONOutput(string(splitReturn[1]))
 	fatalIfError(err, t)
 	fmt.Println(statMSG)
-	if statMSG.Transferred != file.stat.Size() {
-		t.Fatalf("Expected transfeered to be (%d) but got (%d)", file.stat.Size(), statMSG.Transferred)
+	if statMSG.Transferred != file.diskStat.Size() {
+		t.Fatalf("Expected transfeered to be (%d) but got (%d)", file.diskStat.Size(), statMSG.Transferred)
 	}
-	if statMSG.Total != file.stat.Size() {
-		t.Fatalf("Expected total to be (%d) but got (%d)", file.stat.Size(), statMSG.Total)
+	if statMSG.Total != file.diskStat.Size() {
+		t.Fatalf("Expected total to be (%d) but got (%d)", file.diskStat.Size(), statMSG.Total)
 	}
 	if statMSG.Status != "success" {
 		t.Fatalf("Expected status to be (success) but got (%s)", statMSG.Status)
 	}
 }
 
-func Test_LSObjectsAndSaveResults(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func LSObjects(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
-	out, err := RunCommand("ls", "-r", CP_TEST_BUCKET)
+	out, err := RunCommand("ls", "-r", MainTestBucket)
 	fatalIfError(err, t)
 
 	fileList, err := parseLSJSONOutput(out)
@@ -378,7 +427,7 @@ func Test_LSObjectsAndSaveResults(t *testing.T) {
 
 		for _, o := range fileList {
 			if o.Key == f.fileNameWithPrefix {
-				FileMap[i].LSOutput = o
+				FileMap[i].MinioLS = o
 				fileFound = true
 			}
 		}
@@ -391,8 +440,8 @@ func Test_LSObjectsAndSaveResults(t *testing.T) {
 	}
 }
 
-func Test_StatObjecstsAndSaveResults(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func StatObjecsts(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
@@ -400,18 +449,18 @@ func Test_StatObjecstsAndSaveResults(t *testing.T) {
 		if v.uploadShouldFail {
 			continue
 		}
-		out, err := RunCommand("stat", CP_TEST_BUCKET+"/"+v.fileNameWithPrefix)
+		out, err := RunCommand("stat", MainTestBucket+"/"+v.fileNameWithPrefix)
 		fatalIfError(err, t)
-		FileMap[i].MinIOStat, err = parseStatSingleObjectJSONOutput(out)
-		if FileMap[i].MinIOStat.Key == "" {
+		FileMap[i].MinioStat, err = parseStatSingleObjectJSONOutput(out)
+		if FileMap[i].MinioStat.Key == "" {
 			t.Fatalf("Unable to stat Minio object (%s)", v.fileNameWithPrefix)
 		}
 		fatalIfError(err, t)
 	}
 }
 
-func Test_ValidateFileMetaDataPostUpload(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func ValidateFileMetaData(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
@@ -425,12 +474,12 @@ func Test_ValidateFileMetaDataPostUpload(t *testing.T) {
 	}
 }
 
-func Test_FindObjects(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func FindObjects(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
-	out, err := RunCommand("find", CP_TEST_BUCKET)
+	out, err := RunCommand("find", MainTestBucket)
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
@@ -441,19 +490,19 @@ func Test_FindObjects(t *testing.T) {
 
 		found := false
 		for _, vv := range findList {
-			if strings.HasSuffix(vv.Key, v.LSOutput.Key) {
+			if strings.HasSuffix(vv.Key, v.MinioLS.Key) {
 				found = true
 			}
 		}
 
 		if !found {
-			t.Fatalf("File (%s) not found by 'find' command", v.LSOutput.Key)
+			t.Fatalf("File (%s) not found by 'find' command", v.MinioLS.Key)
 		}
 	}
 }
 
-func Test_FindObjectsFullName(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func FindObjectsUsingName(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
@@ -461,22 +510,22 @@ func Test_FindObjectsFullName(t *testing.T) {
 		if v.uploadShouldFail {
 			continue
 		}
-		out, err := RunCommand("find", CP_TEST_BUCKET, "--name", v.fileNameWithoutPath)
+		out, err := RunCommand("find", MainTestBucket, "--name", v.fileNameWithoutPath)
 		fatalIfError(err, t)
 		info, err := parseFindSingleObjectJSONOutput(out)
 		fatalIfError(err, t)
-		if !strings.HasSuffix(info.Key, v.LSOutput.Key) {
-			t.Fatalf("Invalid key (%s) when searching for (%s)", info.Key, v.LSOutput.Key)
+		if !strings.HasSuffix(info.Key, v.MinioLS.Key) {
+			t.Fatalf("Invalid key (%s) when searching for (%s)", info.Key, v.MinioLS.Key)
 		}
 	}
 }
 
-func Test_FindObjectsNameFilterTxtFile(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func FindObjectsUsingNameAndFilteringForTxtType(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
-	out, err := RunCommand("find", CP_TEST_BUCKET, "--name", "*.txt")
+	out, err := RunCommand("find", MainTestBucket, "--name", "*.txt")
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
@@ -487,50 +536,77 @@ func Test_FindObjectsNameFilterTxtFile(t *testing.T) {
 
 		found := false
 		for _, vv := range findList {
-			if strings.HasSuffix(vv.Key, v.LSOutput.Key) {
+			if strings.HasSuffix(vv.Key, v.MinioLS.Key) {
 				found = true
 			}
 		}
 
 		if !found {
-			t.Fatalf("File (%s) not found by 'find' command", v.LSOutput.Key)
+			t.Fatalf("File (%s) not found by 'find' command", v.MinioLS.Key)
 		}
 	}
 }
 
-func Test_FindObjectsLargerThan(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func FindObjectsSmallerThan64Mebibytes(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
-	out, err := RunCommand("find", CP_TEST_BUCKET, "--larger", "64MB")
+	out, err := RunCommand("find", MainTestBucket, "--smaller", "64MB")
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
 	for _, v := range FileMap {
-		if v.uploadShouldFail || v.stat.Size() < GetMBSizeInBytes(64) {
+		if v.uploadShouldFail || v.diskStat.Size() > GetMBSizeInBytes(64) {
 			continue
 		}
 
 		found := false
 		for _, vv := range findList {
-			if strings.HasSuffix(vv.Key, v.LSOutput.Key) {
+			if strings.HasSuffix(vv.Key, v.MinioLS.Key) {
 				found = true
 			}
 		}
 
 		if !found {
-			t.Fatalf("File (%s) not found by 'find' command", v.LSOutput.Key)
+			t.Fatalf("File (%s) not found by 'find' command", v.MinioLS.Key)
 		}
 	}
 }
 
-func Test_FindObjectsOlderThan1d(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func FindObjectsLargerThan64Mebibytes(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
-	out, err := RunCommand("find", CP_TEST_BUCKET, "--older-than", "1d")
+	out, err := RunCommand("find", MainTestBucket, "--larger", "64MB")
+	fatalIfError(err, t)
+	findList, err := parseFindJSONOutput(out)
+	fatalIfError(err, t)
+	for _, v := range FileMap {
+		if v.uploadShouldFail || v.diskStat.Size() < GetMBSizeInBytes(64) {
+			continue
+		}
+
+		found := false
+		for _, vv := range findList {
+			if strings.HasSuffix(vv.Key, v.MinioLS.Key) {
+				found = true
+			}
+		}
+
+		if !found {
+			t.Fatalf("File (%s) not found by 'find' command", v.MinioLS.Key)
+		}
+	}
+}
+
+func FindObjectsOlderThan1d(t *testing.T) {
+	if MainTestBucket == "" {
+		t.Fatalf("This test depends on Test_CPAllFiles")
+	}
+
+	out, err := RunCommand("find", MainTestBucket, "--older-than", "1d")
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
@@ -539,12 +615,12 @@ func Test_FindObjectsOlderThan1d(t *testing.T) {
 	}
 }
 
-func Test_FindObjectsNewerThen1d(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func FindObjectsNewerThen1d(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
-	out, err := RunCommand("find", CP_TEST_BUCKET, "--newer-than", "1d")
+	out, err := RunCommand("find", MainTestBucket, "--newer-than", "1d")
 	fatalIfError(err, t)
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
@@ -555,19 +631,19 @@ func Test_FindObjectsNewerThen1d(t *testing.T) {
 
 		found := false
 		for _, vv := range findList {
-			if strings.HasSuffix(vv.Key, v.LSOutput.Key) {
+			if strings.HasSuffix(vv.Key, v.MinioLS.Key) {
 				found = true
 			}
 		}
 
 		if !found {
-			t.Fatalf("File (%s) not found by 'find' command", v.LSOutput.Key)
+			t.Fatalf("File (%s) not found by 'find' command", v.MinioLS.Key)
 		}
 	}
 }
 
-func Test_GetObjects(t *testing.T) {
-	if CP_TEST_BUCKET == "" {
+func GetObjectsAndCompareMD5(t *testing.T) {
+	if MainTestBucket == "" {
 		t.Fatalf("This test depends on Test_CPAllFiles")
 	}
 
@@ -575,10 +651,11 @@ func Test_GetObjects(t *testing.T) {
 		if v.uploadShouldFail {
 			continue
 		}
+
 		// make sure old downloads are not in our way
 		_ = os.Remove(os.TempDir() + "/" + v.fileNameWithoutPath + ".downloaded")
 
-		_, err := RunCommand("cp", CP_TEST_BUCKET+"/"+v.fileNameWithPrefix, os.TempDir()+"/"+v.fileNameWithoutPath+".downloaded")
+		_, err := RunCommand("cp", MainTestBucket+"/"+v.fileNameWithPrefix, os.TempDir()+"/"+v.fileNameWithoutPath+".downloaded")
 		fatalIfError(err, t)
 
 		downloadedFile, err := os.Open(os.TempDir() + "/" + v.fileNameWithoutPath + ".downloaded")
@@ -594,13 +671,7 @@ func Test_GetObjects(t *testing.T) {
 	}
 }
 
-func fatalIfError(err error, t *testing.T) {
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func Test_CreateBucketFailure(t *testing.T) {
+func CreateBucketUsingInvalidSymbols(t *testing.T) {
 	bucketNameMap := make(map[string]string)
 	bucketNameMap["name-too-big"] = RANDOM_LARGE_STRING
 	bucketNameMap["!"] = "symbol!"
@@ -626,22 +697,26 @@ func Test_CreateBucketFailure(t *testing.T) {
 	}
 }
 
-func Test_RemoveBucketWithErrors(t *testing.T) {
+func RemoveBucketThatDoesNotExist(t *testing.T) {
+	randomID := uuid.NewString()
+
+	// TEST: bucket does not exist
+	out, _ := RunCommand("rb", ALIAS+"/"+randomID)
+	errMSG, _ := parseSingleErrorMessageJSONOutput(out)
+	validateErrorMSGValues(t, errMSG, "error", "Unable to validate", "does not exist")
+}
+
+func RemoveBucketWithNameTooLong(t *testing.T) {
 	randomID := uuid.NewString()
 	// TEST: Name too long
 	out, _ := RunCommand("rb", ALIAS+"/"+randomID+randomID)
 	errMSG, _ := parseSingleErrorMessageJSONOutput(out)
 	validateErrorMSGValues(t, errMSG, "error", "Unable to validate", "Bucket name cannot be longer than 63 characters")
-
-	// TEST: bucket does not exist
-	out, _ = RunCommand("rb", ALIAS+"/"+randomID)
-	errMSG, _ = parseSingleErrorMessageJSONOutput(out)
-	validateErrorMSGValues(t, errMSG, "error", "Unable to validate", "does not exist")
 }
 
-func Test_UploadToUnknownBucket(t *testing.T) {
+func UploadToUnknownBucket(t *testing.T) {
 	randomBucketID := uuid.NewString()
-	parameters := append([]string{}, "cp", FileMap["1M"].file.Name(), ALIAS+"/"+randomBucketID+"-test-should-not-exist"+"/"+FileMap["1M"].fileNameWithoutPath)
+	parameters := append([]string{}, "cp", FileMap["1M"].diskFile.Name(), ALIAS+"/"+randomBucketID+"-test-should-not-exist"+"/"+FileMap["1M"].fileNameWithoutPath)
 
 	_, err := RunCommand(parameters...)
 	if err == nil {
@@ -649,10 +724,10 @@ func Test_UploadToUnknownBucket(t *testing.T) {
 	}
 }
 
-func Test_CLEANUP(t *testing.T) {
-	RemoveBucket(t, CP_TEST_BUCKET)
+func CLEANUP(t *testing.T) {
+	RemoveBucket(t, MainTestBucket)
 	for _, v := range FileMap {
-		_ = os.Remove(v.file.Name())
+		_ = os.Remove(v.diskFile.Name())
 		if !v.uploadShouldFail {
 			_ = os.Remove(os.TempDir() + "/" + v.fileNameWithoutPath + ".downloaded")
 		}
@@ -660,19 +735,19 @@ func Test_CLEANUP(t *testing.T) {
 }
 
 func validateFileLSInfo(t *testing.T, file *testFile) {
-	if file.stat.Size() != int64(file.LSOutput.Size) {
-		t.Fatalf("File and minio object are not the same size - Object (%d) vs File (%d)", file.LSOutput.Size, file.stat.Size())
+	if file.diskStat.Size() != int64(file.MinioLS.Size) {
+		t.Fatalf("File and minio object are not the same size - Object (%d) vs File (%d)", file.MinioLS.Size, file.diskStat.Size())
 	}
 	// if file.md5Sum != file.findOutput.Etag {
 	// 	t.Fatalf("File and file.findOutput do not have the same md5Sum - Object (%s) vs File (%s)", file.findOutput.Etag, file.md5Sum)
 	// }
 	if file.storageClass != "" {
-		if file.storageClass != file.LSOutput.StorageClass {
-			t.Fatalf("File and minio object do not have the same storage class - Object (%s) vs File (%s)", file.LSOutput.StorageClass, file.storageClass)
+		if file.storageClass != file.MinioLS.StorageClass {
+			t.Fatalf("File and minio object do not have the same storage class - Object (%s) vs File (%s)", file.MinioLS.StorageClass, file.storageClass)
 		}
 	} else {
-		if file.LSOutput.StorageClass != "STANDARD" {
-			t.Fatalf("Minio object was expected to have storage class (STANDARD) but it was (%s)", file.LSOutput.StorageClass)
+		if file.MinioLS.StorageClass != "STANDARD" {
+			t.Fatalf("Minio object was expected to have storage class (STANDARD) but it was (%s)", file.MinioLS.StorageClass)
 		}
 	}
 }
@@ -681,13 +756,13 @@ func validateObjectMetaData(t *testing.T, file *testFile) {
 	for i, v := range file.metaData {
 		found := false
 
-		for ii, vv := range file.MinIOStat.Metadata {
-			if META_PREFIX+strings.Title(i) == ii {
+		for ii, vv := range file.MinioStat.Metadata {
+			if MetaPrefix+strings.Title(i) == ii {
 				found = true
 				if v != vv {
 					fmt.Println("------------------------")
 					fmt.Println("META CHECK")
-					fmt.Println(file.MinIOStat.Metadata)
+					fmt.Println(file.MinioStat.Metadata)
 					fmt.Println(file.metaData)
 					fmt.Println("------------------------")
 					t.Fatalf("Meta values are not the same v1(%s) v2(%s)", v, vv)
@@ -698,7 +773,7 @@ func validateObjectMetaData(t *testing.T, file *testFile) {
 		if !found {
 			fmt.Println("------------------------")
 			fmt.Println("META CHECK")
-			fmt.Println(file.MinIOStat.Metadata)
+			fmt.Println(file.MinioStat.Metadata)
 			fmt.Println(file.metaData)
 			fmt.Println("------------------------")
 			t.Fatalf("Meta tag(%s) not found", i)
@@ -707,20 +782,26 @@ func validateObjectMetaData(t *testing.T, file *testFile) {
 	}
 }
 
-func validateContentType(t *testing.T, file *testFile) {
-	value, ok := file.MinIOStat.Metadata["Content-Type"]
-	if !ok {
-		t.Fatalf("File (%s) did not have a content type", file.fileNameWithPrefix)
-		return
-	}
+// func validateContentType(t *testing.T, file *testFile) {
+// 	value, ok := file.MinioStat.Metadata["Content-Type"]
+// 	if !ok {
+// 		t.Fatalf("File (%s) did not have a content type", file.fileNameWithPrefix)
+// 		return
+// 	}
+//
+// 	contentType := mime.TypeByExtension(file.extension)
+// 	if contentType != value {
+// 		log.Println(file)
+// 		log.Println(file.MinioLS)
+// 		log.Println(file.extension)
+// 		log.Println(file.MinioStat)
+// 		t.Fatalf("Content types on file (%s) do not match, extension(%s) File(%s) MinIO object(%s)", file.fileNameWithPrefix, file.extension, contentType, file.MinioStat.Metadata["Content-Type"])
+// 	}
+// }
 
-	contentType := mime.TypeByExtension(file.extension)
-	if contentType != value {
-		log.Println(file)
-		log.Println(file.LSOutput)
-		log.Println(file.extension)
-		log.Println(file.MinIOStat)
-		t.Fatalf("Content types on file (%s) do not match, extension(%s) File(%s) MinIO object(%s)", file.fileNameWithPrefix, file.extension, contentType, file.MinIOStat.Metadata["Content-Type"])
+func fatalIfError(err error, t *testing.T) {
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -883,17 +964,17 @@ type newTestFile struct {
 
 type testFile struct {
 	newTestFile
-	LSOutput            contentMessage
-	MinIOStat           statMessage
-	file                *os.File
-	stat                os.FileInfo
+	MinioLS             contentMessage
+	MinioStat           statMessage
+	diskFile            *os.File
+	diskStat            os.FileInfo
 	md5Sum              string
 	fileNameWithoutPath string
 	fileNameWithPrefix  string
 }
 
 func (f *testFile) String() (out string) {
-	out = fmt.Sprintf("Size: %d || Name: %s || md5Sum: %s", f.stat.Size(), f.fileNameWithoutPath, f.md5Sum)
+	out = fmt.Sprintf("Size: %d || Name: %s || md5Sum: %s", f.diskStat.Size(), f.fileNameWithoutPath, f.md5Sum)
 	return
 }
 
@@ -931,9 +1012,10 @@ func createFile(nf newTestFile) (newTestFile *testFile) {
 	newTestFile = &testFile{
 		md5Sum:              md5sum,
 		fileNameWithoutPath: fileNameWithoutPath,
-		file:                newFile,
-		stat:                stats,
+		diskFile:            newFile,
+		diskStat:            stats,
 	}
+
 	newTestFile.tag = nf.tag
 	newTestFile.metaData = nf.metaData
 	newTestFile.storageClass = nf.storageClass
@@ -942,6 +1024,7 @@ func createFile(nf newTestFile) (newTestFile *testFile) {
 	newTestFile.tags = nf.tags
 	newTestFile.prefix = nf.prefix
 	newTestFile.extension = nf.extension
+
 	if nf.prefix != "" {
 		newTestFile.fileNameWithPrefix = nf.prefix + "/" + fileNameWithoutPath
 	} else {
@@ -968,7 +1051,7 @@ func RunCommand(parameters ...string) (out string, err error) {
 	var outBytes []byte
 	var outErr error
 
-	if JSON_OutPut {
+	if JSONOutput {
 		parameters = append([]string{JSON}, parameters...)
 		outBytes, outErr = exec.Command(CMD, parameters...).CombinedOutput()
 	} else {
