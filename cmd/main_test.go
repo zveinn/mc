@@ -75,14 +75,14 @@ import (
 //    teardown
 
 var (
-	OneMBSlice          [1048576]byte // 1x Mebibyte
-	ALIAS               = "play"
-	FileMap             = make(map[string]*testFile)
-	RANDOM_LARGE_STRING = "lksdjfljsdklfjklsdjfklksjdf;lsjdk;fjks;djflsdlfkjskldjfklkljsdfljsldkfjklsjdfkljsdklfjklsdjflksjdlfjsdjflsjdflsldfjlsjdflksjdflkjslkdjflksfdj"
-	JSON                = "--json"
-	JSONOutput          = true
-	CMD                 = "../mc"
-	MetaPrefix          = "X-Amz-Meta-"
+	OneMBSlice        [1048576]byte // 1x Mebibyte
+	ALIAS             = "play"
+	FileMap           = make(map[string]*testFile)
+	RandomLargeString = "lksdjfljsdklfjklsdjfklksjdf;lsjdk;fjks;djflsdlfkjskldjfklkljsdfljsldkfjklsjdfkljsdklfjklsdjflksjdlfjsdjflsjdflsldfjlsjdflksjdflkjslkdjflksfdj"
+	JSON              = "--json"
+	JSONOutput        = true
+	CMD               = "../mc"
+	MetaPrefix        = "X-Amz-Meta-"
 
 	ServerEndpoint           = "play.min.io"
 	AcessKey                 = "Q3AM3UQ867SPQQA43P2F"
@@ -1007,21 +1007,27 @@ func GetObjectsAndCompareMD5(t *testing.T) {
 		)
 		fatalIfError(err, t)
 
-		downloadedFile, err := os.Open(TempDir + "/" + v.fileNameWithoutPath + ".downloaded")
+		downloadedFile, err := os.Open(
+			TempDir + "/" + v.fileNameWithoutPath + ".downloaded",
+		)
 		fatalIfError(err, t)
 
 		fileBytes, err := io.ReadAll(downloadedFile)
 		md5sum := GetMD5Sum(fileBytes)
 
 		if v.md5Sum != md5sum {
-			t.Fatalf("The downloaded file md5sum is wrong: original-md5(%s) downloaded-md5(%s)", v.md5Sum, md5sum)
+			t.Fatalf(
+				"The downloaded file md5sum is wrong: original-md5(%s) downloaded-md5(%s)",
+				v.md5Sum,
+				md5sum,
+			)
 		}
 	}
 }
 
 func CreateBucketUsingInvalidSymbols(t *testing.T) {
 	bucketNameMap := make(map[string]string)
-	bucketNameMap["name-too-big"] = RANDOM_LARGE_STRING
+	bucketNameMap["name-too-big"] = RandomLargeString
 	bucketNameMap["!"] = "symbol!"
 	bucketNameMap["@"] = "symbol@"
 	bucketNameMap["#"] = "symbol#"
@@ -1079,7 +1085,12 @@ func RemoveBucketWithNameTooLong(t *testing.T) {
 
 func UploadToUnknownBucket(t *testing.T) {
 	randomBucketID := uuid.NewString()
-	parameters := append([]string{}, "cp", FileMap["1M"].diskFile.Name(), ALIAS+"/"+randomBucketID+"-test-should-not-exist"+"/"+FileMap["1M"].fileNameWithoutPath)
+	parameters := append(
+		[]string{},
+		"cp",
+		FileMap["1M"].diskFile.Name(),
+		ALIAS+"/"+randomBucketID+"-test-should-not-exist"+"/"+FileMap["1M"].fileNameWithoutPath,
+	)
 
 	_, err := RunCommand(parameters...)
 	if err == nil {
@@ -1113,18 +1124,29 @@ func CLEANUP(t *testing.T) {
 
 func validateFileLSInfo(t *testing.T, file *testFile) {
 	if file.diskStat.Size() != int64(file.MinioLS.Size) {
-		t.Fatalf("File and minio object are not the same size - Object (%d) vs File (%d)", file.MinioLS.Size, file.diskStat.Size())
+		t.Fatalf(
+			"File and minio object are not the same size - Object (%d) vs File (%d)",
+			file.MinioLS.Size,
+			file.diskStat.Size(),
+		)
 	}
 	// if file.md5Sum != file.findOutput.Etag {
 	// 	t.Fatalf("File and file.findOutput do not have the same md5Sum - Object (%s) vs File (%s)", file.findOutput.Etag, file.md5Sum)
 	// }
 	if file.storageClass != "" {
 		if file.storageClass != file.MinioLS.StorageClass {
-			t.Fatalf("File and minio object do not have the same storage class - Object (%s) vs File (%s)", file.MinioLS.StorageClass, file.storageClass)
+			t.Fatalf(
+				"File and minio object do not have the same storage class - Object (%s) vs File (%s)",
+				file.MinioLS.StorageClass,
+				file.storageClass,
+			)
 		}
 	} else {
 		if file.MinioLS.StorageClass != "STANDARD" {
-			t.Fatalf("Minio object was expected to have storage class (STANDARD) but it was (%s)", file.MinioLS.StorageClass)
+			t.Fatalf(
+				"Minio object was expected to have storage class (STANDARD) but it was (%s)",
+				file.MinioLS.StorageClass,
+			)
 		}
 	}
 }
@@ -1323,17 +1345,29 @@ func validateErrorMSGValues(
 ) {
 	if TypeToValidate != "" {
 		if !strings.Contains(errMSG.Error.Type, TypeToValidate) {
-			t.Fatalf("Expected error.Error.Type to contain (%s) - but got (%s)", TypeToValidate, errMSG.Error.Type)
+			t.Fatalf(
+				"Expected error.Error.Type to contain (%s) - but got (%s)",
+				TypeToValidate,
+				errMSG.Error.Type,
+			)
 		}
 	}
 	if MessageToValidate != "" {
 		if !strings.Contains(errMSG.Error.Message, MessageToValidate) {
-			t.Fatalf("Expected error.Error.Message to contain (%s) - but got (%s)", MessageToValidate, errMSG.Error.Message)
+			t.Fatalf(
+				"Expected error.Error.Message to contain (%s) - but got (%s)",
+				MessageToValidate,
+				errMSG.Error.Message,
+			)
 		}
 	}
 	if CauseToValidate != "" {
 		if !strings.Contains(errMSG.Error.Cause.Message, CauseToValidate) {
-			t.Fatalf("Expected error.Error.Cause.Message to contain (%s) - but got (%s)", CauseToValidate, errMSG.Error.Cause.Message)
+			t.Fatalf(
+				"Expected error.Error.Cause.Message to contain (%s) - but got (%s)",
+				CauseToValidate,
+				errMSG.Error.Cause.Message,
+			)
 		}
 	}
 }
@@ -1402,7 +1436,12 @@ type testFile struct {
 }
 
 func (f *testFile) String() (out string) {
-	out = fmt.Sprintf("Size: %d || Name: %s || md5Sum: %s", f.diskStat.Size(), f.fileNameWithoutPath, f.md5Sum)
+	out = fmt.Sprintf(
+		"Size: %d || Name: %s || md5Sum: %s",
+		f.diskStat.Size(),
+		f.fileNameWithoutPath,
+		f.md5Sum,
+	)
 	return
 }
 
