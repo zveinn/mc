@@ -10,6 +10,8 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,7 +31,6 @@ import (
 //	DONE test_make_bucket_error
 //  DONE test_rb
 //
-//  ???? test_list_dir (... we list alot ????)
 //  DONE test_put_object
 //  DONE test_put_object_error
 //  DONE test_put_object_0byte
@@ -54,18 +55,18 @@ import (
 //    test_copy_object_preserve_filesystem_attr
 //		test_watch_object
 //
-//		test_put_object_with_sse
-//		test_put_object_with_encoded_sse
-//		test_put_object_with_sse_error
-//		test_put_object_multipart_sse
-//		test_get_object_with_sse
-//		test_cat_object_with_sse
-//		test_cat_object_with_sse_error
-//		test_copy_object_with_sse_rewrite
-//		test_copy_object_with_sse_dest
-//		test_sse_key_rotation
-//		test_mirror_with_sse
-//		test_rm_object_with_sse
+//	DONE test_put_object_with_sse
+//	DONE	test_put_object_with_encoded_sse
+//	DONE	test_put_object_with_sse_error
+//  DONE  test_put_object_multipart_sse
+//	DONE	test_get_object_with_sse
+//	DONE	test_cat_object_with_sse
+//	DONE	test_cat_object_with_sse_error
+//	DONE	test_copy_object_with_sse_rewrite
+//	DONE	test_copy_object_with_sse_dest
+//	DONE	test_sse_key_rotation
+//	DONE	test_mirror_with_sse
+//	DONE	test_rm_object_with_sse
 //
 //    test_config_host_add
 //    test_config_host_add_error
@@ -83,18 +84,28 @@ var (
 	CMD                 = "../mc"
 	MetaPrefix          = "X-Amz-Meta-"
 
-	ServerEndpoint = "play.min.io"
-	AcessKey       = "Q3AM3UQ867SPQQA43P2F"
-	SecretKey      = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
-	SkipBuild      = false
-	MainTestBucket string
+	ServerEndpoint           = "play.min.io"
+	AcessKey                 = "Q3AM3UQ867SPQQA43P2F"
+	SecretKey                = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
+	SkipBuild                = false
+	Protocol                 = "http://"
+	SkipInsecure             = false
+	TempDir                  = ""
+	MainTestBucket           string
+	SSETestBucket            string
+	BucketList               = make([]string, 0)
+	BaseSSEKey               = "32byteslongsecretkeymustbegiven1"
+	BaseSSEKey2              = "32byteslongsecretkeymustbegiven2"
+	BaseInvalidSSEEncodedKey = "MzJieXRlc2xvbmdzZWNyZWFiY2RlZmcJZ2l2ZW5uM="
+	BaseSSEEncodedKey        = "MzJieXRlc2xvbmdzZWNyZWFiY2RlZmcJZ2l2ZW5uMjE="
+	BaseInvalidSSEKey        = "32byteslongsecretkeymustbe"
 )
 
 func GetMBSizeInBytes(MB int) int64 {
 	return int64(MB * len(OneMBSlice))
 }
 
-func initializeTestSuite() {
+func initializeTestSuite(t *testing.T) {
 	shouldSkipBuild := os.Getenv("SKIP_BUILD")
 	shouldSkipBool, _ := strconv.ParseBool(shouldSkipBuild)
 	if !shouldSkipBool {
@@ -104,6 +115,17 @@ func initializeTestSuite() {
 		}
 	}
 
+	var err error
+	TempDir, err = os.MkdirTemp("", "minio-mc-test")
+	if err != nil {
+		log.Println(err)
+		os.Exit(1)
+	}
+
+	envALIAS := os.Getenv("ALIAS")
+	if envALIAS != "" {
+		ALIAS = envALIAS
+	}
 	envSecretKey := os.Getenv("SECRET_KEY")
 	if envSecretKey != "" {
 		SecretKey = envSecretKey
@@ -116,6 +138,17 @@ func initializeTestSuite() {
 	if envServerEndpoint != "" {
 		ServerEndpoint = envServerEndpoint
 	}
+
+	envSkipInsecure := os.Getenv("SKIP_INSECURE")
+	if envSkipInsecure == "true" {
+		SkipInsecure = true
+	}
+
+	envEnableHTTP := os.Getenv("ENABLE_HTTPS")
+	if envEnableHTTP == "true" {
+		Protocol = "https://"
+	}
+
 	envCMD := os.Getenv("CMD")
 	if envCMD != "" {
 		CMD = envCMD
@@ -125,7 +158,6 @@ func initializeTestSuite() {
 		OneMBSlice[i] = byte(rand.Intn(250))
 	}
 
-	// CreateFile("0M", 0, "REDUCED_REDUNDANCY")
 	createFile(newTestFile{
 		tag:                "0M",
 		prefix:             "",
@@ -191,24 +223,39 @@ func initializeTestSuite() {
 		addToGlobalFileMap: true,
 	})
 
-	out, err := RunCommand(
-		"alias",
-		"set",
-		ALIAS,
-		"https://"+ServerEndpoint,
-		AcessKey,
-		SecretKey,
-	)
+	cmd := make([]string, 0)
+	cmd = append(cmd, "alias")
+	cmd = append(cmd, "set")
+	cmd = append(cmd, ALIAS)
+	cmd = append(cmd, Protocol+ServerEndpoint)
+	cmd = append(cmd, AcessKey)
+	cmd = append(cmd, SecretKey)
+	if SkipInsecure {
+		cmd = append(cmd, "--insecure")
+	}
+
+	out, err := RunCommand(cmd...)
 	if err != nil {
 		log.Println(out)
 		panic(err)
 	}
+
+	MainTestBucket = CreateBucket(t)
+	SSETestBucket = CreateBucket(t)
 }
 
 func Test_FullSuite(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r != nil {
+			log.Println(r, string(debug.Stack()))
+		}
+
+		CLEANUP(t)
+	}()
 	// initializeTestSuite builds the mc client and creates local files which are used for testing
-	initializeTestSuite()
-	// uploadAllFiles uploads all files in FileMap to CP_TEST_BUCKET
+	initializeTestSuite(t)
+	// uploadAllFiles uploads all files in FileMap to MainTestBucket
 	uploadAllFiles(t)
 	// LSObjects saves the output of LS inside *testFile in FileMap
 	LSObjects(t)
@@ -218,6 +265,7 @@ func Test_FullSuite(t *testing.T) {
 	ValidateFileMetaData(t)
 
 	// The following tests rely on files uploaded via (uploadAllFiles)
+
 	// OD(t)
 	FindObjects(t)
 	FindObjectsUsingName(t)
@@ -231,19 +279,21 @@ func Test_FullSuite(t *testing.T) {
 	RemoveBucketWithNameTooLong(t)
 	RemoveBucketThatDoesNotExist(t)
 
-	// This function cleans up the test suite
-	CLEANUP(t)
+	// SEE tests use the SSETestBucket
+	PutObjectWithSSE(t)
+	PutObjectWithSSEMultipart(t)
+	PutObjectWithEncodedSSE(t)
+	PutObjectWithSSEInvalidKeys(t)
+	GetObjectWithSSE(t)
+	GetObjectWithSSEWithoutKey(t)
+	CatObjectWithSSE(t)
+	CatObjectWithSSEWithoutKey(t)
+	CopyObjectWithSSEToNewBucketWithNewKey(t)
+	MirrorTempDirectoryUsingSSE(t)
+	RemoveObjectWithSSE(t)
 
 	// Independent tests
-	MoveFileDiskToMinio(t)
-}
-
-func RemoveBucket(t *testing.T, path string) {
-	out, err := RunCommand("rb", "--force", "--dangerous", path)
-	if err != nil {
-		t.Fatalf("Unable to remove bucket bucket (%s) err: %s", path, string(out))
-		return
-	}
+	MoveFileFromDiskToMinio(t)
 }
 
 func CreateBucket(t *testing.T) (bucketPath string) {
@@ -251,12 +301,13 @@ func CreateBucket(t *testing.T) (bucketPath string) {
 	bucketPath = ALIAS + "/" + bucketName
 	out, err := RunCommand("mb", bucketPath)
 	if err != nil {
-		t.Fatalf("Unable to create bucket (%s) err: %s", bucketPath, string(out))
+		t.Fatalf("Unable to create bucket (%s) err: %s", bucketPath, out)
 		return
 	}
+	BucketList = append(BucketList, bucketPath)
 	out, err = RunCommand("ls", ALIAS)
 	if err != nil {
-		t.Fatalf("Unable to ls alias (%s) err: %s", ALIAS, string(out))
+		t.Fatalf("Unable to ls alias (%s) err: %s", ALIAS, out)
 		return
 	}
 	if !strings.Contains(out, bucketName) {
@@ -265,9 +316,227 @@ func CreateBucket(t *testing.T) (bucketPath string) {
 	return
 }
 
-func uploadAllFiles(t *testing.T) {
-	MainTestBucket = CreateBucket(t)
+func PutObjectWithSSEMultipart(t *testing.T) {
+	file := FileMap["65M"]
+	p := make([]string, 0)
+	p = append(p, "cp")
+	p = append(p, "--encrypt-key="+SSETestBucket+"="+BaseSSEKey)
+	p = append(p, file.diskFile.Name())
+	p = append(p, SSETestBucket+"/"+file.fileNameWithoutPath)
 
+	out, err := RunCommand(p...)
+	if err != nil {
+		t.Fatal(err, out)
+	}
+}
+
+func PutObjectWithSSE(t *testing.T) {
+	file := FileMap["1M"]
+	p := make([]string, 0)
+	p = append(p, "cp")
+	p = append(p, "--encrypt-key="+SSETestBucket+"="+BaseSSEKey)
+	p = append(p, file.diskFile.Name())
+	p = append(p, SSETestBucket+"/"+file.fileNameWithoutPath)
+	out, err := RunCommand(p...)
+	if err != nil {
+		t.Fatal(err, out)
+	}
+}
+
+func PutObjectWithEncodedSSE(t *testing.T) {
+	file := FileMap["2M"]
+	p := make([]string, 0)
+	p = append(p, "cp")
+	p = append(p, "--encrypt-key="+SSETestBucket+"="+BaseSSEEncodedKey)
+	p = append(p, file.diskFile.Name())
+	p = append(p, SSETestBucket+"/"+file.fileNameWithoutPath+".encodedkey")
+	out, err := RunCommand(p...)
+	if err != nil {
+		t.Fatal(err, out)
+	}
+}
+
+func PutObjectWithSSEInvalidKeys(t *testing.T) {
+	file := FileMap["1M"]
+	p1 := make([]string, 0)
+	p1 = append(p1, "cp")
+	p1 = append(p1, "--encrypt-key="+SSETestBucket+"="+BaseInvalidSSEKey)
+	p1 = append(p1, file.diskFile.Name())
+	p1 = append(p1, SSETestBucket+"/"+file.fileNameWithoutPath)
+	out, err := RunCommand(p1...)
+	if err == nil {
+		t.Fatal(err, out)
+	}
+
+	p2 := make([]string, 0)
+	p2 = append(p2, "cp")
+	p2 = append(p2, "--encrypt-key="+SSETestBucket+"="+BaseInvalidSSEEncodedKey)
+	p2 = append(p2, file.diskFile.Name())
+	p2 = append(p2, SSETestBucket+"/"+file.fileNameWithoutPath)
+	out, err = RunCommand(p2...)
+	if err == nil {
+		t.Fatal(err, out)
+	}
+}
+
+func GetObjectWithSSE(t *testing.T) {
+	file := FileMap["1M"]
+	p := make([]string, 0)
+	p = append(p, "cp")
+	p = append(p, "--encrypt-key="+SSETestBucket+"="+BaseSSEKey)
+	p = append(p, SSETestBucket+"/"+file.fileNameWithoutPath)
+	p = append(p, file.diskFile.Name()+".download")
+
+	out, err := RunCommand(p...)
+	fatalIfErrorWMsg(err, out, t)
+}
+
+func GetObjectWithSSEWithoutKey(t *testing.T) {
+	file := FileMap["1M"]
+	p := make([]string, 0)
+	p = append(p, "cp")
+	p = append(p, SSETestBucket+"/"+file.fileNameWithoutPath)
+	p = append(p, file.diskFile.Name()+"-get")
+
+	out, err := RunCommand(p...)
+	if err == nil {
+		t.Fatal(err, out)
+	}
+}
+
+func CatObjectWithSSE(t *testing.T) {
+	file := FileMap["1M"]
+	p := make([]string, 0)
+	p = append(p, "cat")
+	p = append(p, "--encrypt-key="+SSETestBucket+"="+BaseSSEKey)
+	p = append(p, SSETestBucket+"/"+file.fileNameWithoutPath)
+	// p = append(p, file.diskFile.Name()+".cat")
+
+	out, err := RunCommand(p...)
+	fatalIfError(err, t)
+	catMD5Sum := GetMD5Sum([]byte(out))
+
+	if catMD5Sum != file.md5Sum {
+		fatalMsgOnly(fmt.Sprintf(
+			"expected md5sum %s but we got %s",
+			file.md5Sum,
+			catMD5Sum,
+		), t)
+	}
+
+	if int64(len(out)) != file.MinioStat.Size {
+		fatalMsgOnly(fmt.Sprintf(
+			"file size is %d but we got %d",
+			file.MinioStat.Size,
+			len(out),
+		), t)
+	}
+
+	fatalIfErrorWMsg(
+		err,
+		"cat length: "+strconv.Itoa(len(out))+" -- file length:"+strconv.Itoa(int(file.diskStat.Size())),
+		t,
+	)
+}
+
+func CatObjectWithSSEWithoutKey(t *testing.T) {
+	file := FileMap["1M"]
+	p := make([]string, 0)
+	p = append(p, "cat")
+	p = append(p, SSETestBucket+"/"+file.fileNameWithoutPath)
+	p = append(p, file.diskFile.Name()+"-cat")
+
+	out, err := RunCommand(p...)
+	fatalIfNoErrorWMsg(err, out, t)
+}
+
+func RemoveObjectWithSSE(t *testing.T) {
+	RemoveBucket := CreateBucket(t)
+
+	file := createFile(newTestFile{
+		tag:                "1M-RM",
+		prefix:             "LVL1",
+		extension:          ".png",
+		storageClass:       "",
+		sizeInMBS:          1,
+		metaData:           map[string]string{"name": "1M"},
+		uploadShouldFail:   false,
+		addToGlobalFileMap: false,
+	})
+
+	p := make([]string, 0)
+	p = append(p, "cp")
+	p = append(p, "--encrypt-key="+SSETestBucket+"="+BaseSSEKey)
+	p = append(p, file.diskFile.Name())
+	p = append(p, RemoveBucket+"/"+file.fileNameWithoutPath)
+	out, err := RunCommand(p...)
+	fatalIfErrorWMsg(err, out, t)
+
+	p2 := make([]string, 0)
+	p2 = append(p2, "rm")
+	p2 = append(p2, RemoveBucket+"/"+file.fileNameWithoutPath)
+	out, err = RunCommand(p2...)
+	fatalIfErrorWMsg(err, out, t)
+
+	p3 := make([]string, 0)
+	p3 = append(p3, "stat")
+	p3 = append(p3, "--encrypt-key="+SSETestBucket+"="+BaseSSEKey)
+	p3 = append(p3, RemoveBucket+"/"+file.fileNameWithoutPath)
+	out, err = RunCommand(p3...)
+	fatalIfNoErrorWMsg(err, out, t)
+}
+
+func MirrorTempDirectoryUsingSSE(t *testing.T) {
+	MirrorBucket := CreateBucket(t)
+
+	p := make([]string, 0)
+	p = append(p, "mirror")
+	p = append(p, "--encrypt-key="+SSETestBucket+"="+BaseSSEKey)
+	p = append(p, TempDir)
+	p = append(p, MirrorBucket)
+
+	out, err := RunCommand(p...)
+	fatalIfErrorWMsg(err, out, t)
+
+	out, err = RunCommand("ls", "-r", MirrorBucket)
+	fatalIfError(err, t)
+
+	fileList, err := parseLSJSONOutput(out)
+	fatalIfError(err, t)
+
+	for i, f := range FileMap {
+		fileFound := false
+
+		for _, o := range fileList {
+			if o.Key == f.fileNameWithoutPath {
+				FileMap[i].MinioLS = o
+				fileFound = true
+			}
+		}
+
+		if !fileFound {
+			t.Fatalf("File was not uploaded: %s", f.fileNameWithPrefix)
+		}
+	}
+}
+
+func CopyObjectWithSSEToNewBucketWithNewKey(t *testing.T) {
+	TargetSSEBucket := CreateBucket(t)
+	file := FileMap["1M"]
+
+	p2 := make([]string, 0)
+	p2 = append(p2, "cp")
+	p2 = append(p2, "--encrypt-key="+SSETestBucket+"="+BaseSSEKey+","+TargetSSEBucket+"="+BaseSSEKey2)
+	p2 = append(p2, SSETestBucket+"/"+file.fileNameWithoutPath)
+	p2 = append(p2, TargetSSEBucket+"/"+file.fileNameWithoutPath)
+
+	out, err := RunCommand(p2...)
+	if err != nil {
+		t.Fatal(err, out)
+	}
+}
+
+func uploadAllFiles(t *testing.T) {
 	for _, v := range FileMap {
 		parameters := make([]string, 0)
 		parameters = append(parameters, "cp")
@@ -321,54 +590,93 @@ func uploadAllFiles(t *testing.T) {
 func OD(t *testing.T) {
 	LocalBucketPath := CreateBucket(t)
 
-	defer func() {
-		RemoveBucket(t, LocalBucketPath)
-	}()
-
 	file := FileMap["65M"]
-	out, err := RunCommand("od", "if="+file.diskFile.Name(), "of="+LocalBucketPath+"/od/"+file.fileNameWithoutPath, "parts=10")
+	out, err := RunCommand(
+		"od",
+		"if="+file.diskFile.Name(),
+		"of="+LocalBucketPath+"/od/"+file.fileNameWithoutPath,
+		"parts=10",
+	)
+
 	fatalIfError(err, t)
 	odMsg, err := parseSingleODMessageJSONOutput(out)
 	fatalIfError(err, t)
 
 	if odMsg.TotalSize != file.diskStat.Size() {
-		t.Fatalf("Expected (%d) bytes to be uploaded but only uploaded (%d) bytes", odMsg.TotalSize, file.diskStat.Size())
-	}
-	if odMsg.Parts != 10 {
-		t.Fatalf("Expected upload parts to be (10) but they were (%d)", odMsg.Parts)
-	}
-	if odMsg.Type != "FStoS3" {
-		t.Fatalf("Expected type to be (FStoS3) but got (%s)", odMsg.Type)
-	}
-	if odMsg.PartSize != uint64(file.diskStat.Size())/10 {
-		t.Fatalf("Expected part size to be (%d) but got (%d)", file.diskStat.Size()/10, odMsg.PartSize)
+		t.Fatalf(
+			"Expected (%d) bytes to be uploaded but only uploaded (%d) bytes",
+			odMsg.TotalSize,
+			file.diskStat.Size(),
+		)
 	}
 
-	out, err = RunCommand("od", "of="+file.diskFile.Name(), "if="+LocalBucketPath+"/od/"+file.fileNameWithoutPath, "parts=10")
+	if odMsg.Parts != 10 {
+		t.Fatalf(
+			"Expected upload parts to be (10) but they were (%d)",
+			odMsg.Parts,
+		)
+	}
+
+	if odMsg.Type != "FStoS3" {
+		t.Fatalf(
+			"Expected type to be (FStoS3) but got (%s)",
+			odMsg.Type,
+		)
+	}
+
+	if odMsg.PartSize != uint64(file.diskStat.Size())/10 {
+		t.Fatalf(
+			"Expected part size to be (%d) but got (%d)",
+			file.diskStat.Size()/10,
+			odMsg.PartSize,
+		)
+	}
+
+	out, err = RunCommand(
+		"od",
+		"of="+file.diskFile.Name(),
+		"if="+LocalBucketPath+"/od/"+file.fileNameWithoutPath,
+		"parts=10",
+	)
+
 	fatalIfError(err, t)
-	fmt.Println(string(out))
+	fmt.Println(out)
 	odMsg, err = parseSingleODMessageJSONOutput(out)
 	fatalIfError(err, t)
 
 	if odMsg.TotalSize != file.diskStat.Size() {
-		t.Fatalf("Expected (%d) bytes to be uploaded but only uploaded (%d) bytes", odMsg.TotalSize, file.diskStat.Size())
+		t.Fatalf(
+			"Expected (%d) bytes to be uploaded but only uploaded (%d) bytes",
+			odMsg.TotalSize,
+			file.diskStat.Size(),
+		)
 	}
+
 	if odMsg.Parts != 10 {
-		t.Fatalf("Expected upload parts to be (10) but they were (%d)", odMsg.Parts)
+		t.Fatalf(
+			"Expected upload parts to be (10) but they were (%d)",
+			odMsg.Parts,
+		)
 	}
+
 	if odMsg.Type != "S3toFS" {
-		t.Fatalf("Expected type to be (FStoS3) but got (%s)", odMsg.Type)
+		t.Fatalf(
+			"Expected type to be (FStoS3) but got (%s)",
+			odMsg.Type,
+		)
 	}
+
 	if odMsg.PartSize != uint64(file.diskStat.Size())/10 {
-		t.Fatalf("Expected part size to be (%d) but got (%d)", file.diskStat.Size()/10, odMsg.PartSize)
+		t.Fatalf(
+			"Expected part size to be (%d) but got (%d)",
+			file.diskStat.Size()/10,
+			odMsg.PartSize,
+		)
 	}
 }
 
-func MoveFileDiskToMinio(t *testing.T) {
+func MoveFileFromDiskToMinio(t *testing.T) {
 	LocalBucketPath := CreateBucket(t)
-	defer func() {
-		RemoveBucket(t, LocalBucketPath)
-	}()
 
 	file := createFile(newTestFile{
 		tag:                "10Move",
@@ -382,41 +690,65 @@ func MoveFileDiskToMinio(t *testing.T) {
 		addToGlobalFileMap: false,
 	})
 
-	out, err := RunCommand("mv", file.diskFile.Name(), LocalBucketPath+"/"+file.fileNameWithoutPath)
+	out, err := RunCommand(
+		"mv",
+		file.diskFile.Name(),
+		LocalBucketPath+"/"+file.fileNameWithoutPath,
+	)
+
 	fatalIfError(err, t)
 	splitReturn := bytes.Split([]byte(out), []byte{10})
 
 	mvMSG, err := parseSingleCPMessageJSONOutput(string(splitReturn[0]))
 	fatalIfError(err, t)
+
 	if mvMSG.TotalCount != 1 {
 		t.Fatalf("Expected count to be 1 but got (%d)", mvMSG.TotalCount)
 	}
+
 	if mvMSG.Size != file.diskStat.Size() {
-		t.Fatalf("Expected size to be (%d) but got (%d)", file.diskStat.Size(), mvMSG.Size)
+		t.Fatalf(
+			"Expected size to be (%d) but got (%d)",
+			file.diskStat.Size(),
+			mvMSG.Size,
+		)
 	}
+
 	if mvMSG.Status != "success" {
-		t.Fatalf("Expected status to be (success) but got (%s)", mvMSG.Status)
+		t.Fatalf(
+			"Expected status to be (success) but got (%s)",
+			mvMSG.Status,
+		)
 	}
 
 	statMSG, err := parseSingleAccountStatJSONOutput(string(splitReturn[1]))
 	fatalIfError(err, t)
-	fmt.Println(statMSG)
+
 	if statMSG.Transferred != file.diskStat.Size() {
-		t.Fatalf("Expected transfeered to be (%d) but got (%d)", file.diskStat.Size(), statMSG.Transferred)
+		t.Fatalf(
+			"Expected transfeered to be (%d) but got (%d)",
+			file.diskStat.Size(),
+			statMSG.Transferred,
+		)
 	}
+
 	if statMSG.Total != file.diskStat.Size() {
-		t.Fatalf("Expected total to be (%d) but got (%d)", file.diskStat.Size(), statMSG.Total)
+		t.Fatalf(
+			"Expected total to be (%d) but got (%d)",
+			file.diskStat.Size(),
+			statMSG.Total,
+		)
 	}
+
 	if statMSG.Status != "success" {
-		t.Fatalf("Expected status to be (success) but got (%s)", statMSG.Status)
+		t.Fatalf(
+			"Expected status to be (success) but got (%s)",
+			statMSG.Status,
+		)
 	}
 }
 
 func LSObjects(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
 	out, err := RunCommand("ls", "-r", MainTestBucket)
 	fatalIfError(err, t)
 
@@ -442,29 +774,28 @@ func LSObjects(t *testing.T) {
 }
 
 func StatObjecsts(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
 	for i, v := range FileMap {
 		if v.uploadShouldFail {
 			continue
 		}
-		out, err := RunCommand("stat", MainTestBucket+"/"+v.fileNameWithPrefix)
+
+		out, err := RunCommand(
+			"stat",
+			MainTestBucket+"/"+v.fileNameWithPrefix,
+		)
 		fatalIfError(err, t)
+
 		FileMap[i].MinioStat, err = parseStatSingleObjectJSONOutput(out)
+		fatalIfError(err, t)
+
 		if FileMap[i].MinioStat.Key == "" {
 			t.Fatalf("Unable to stat Minio object (%s)", v.fileNameWithPrefix)
 		}
-		fatalIfError(err, t)
+
 	}
 }
 
 func ValidateFileMetaData(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
 	for _, f := range FileMap {
 		if f.uploadShouldFail {
 			continue
@@ -476,14 +807,12 @@ func ValidateFileMetaData(t *testing.T) {
 }
 
 func FindObjects(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
 	out, err := RunCommand("find", MainTestBucket)
 	fatalIfError(err, t)
+
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
+
 	for _, v := range FileMap {
 		if v.uploadShouldFail {
 			continue
@@ -503,33 +832,40 @@ func FindObjects(t *testing.T) {
 }
 
 func FindObjectsUsingName(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
 	for _, v := range FileMap {
 		if v.uploadShouldFail {
 			continue
 		}
-		out, err := RunCommand("find", MainTestBucket, "--name", v.fileNameWithoutPath)
+
+		out, err := RunCommand(
+			"find",
+			MainTestBucket,
+			"--name",
+			v.fileNameWithoutPath,
+		)
+
 		fatalIfError(err, t)
 		info, err := parseFindSingleObjectJSONOutput(out)
 		fatalIfError(err, t)
 		if !strings.HasSuffix(info.Key, v.MinioLS.Key) {
 			t.Fatalf("Invalid key (%s) when searching for (%s)", info.Key, v.MinioLS.Key)
 		}
+
 	}
 }
 
 func FindObjectsUsingNameAndFilteringForTxtType(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
-	out, err := RunCommand("find", MainTestBucket, "--name", "*.txt")
+	out, err := RunCommand(
+		"find",
+		MainTestBucket,
+		"--name",
+		"*.txt",
+	)
 	fatalIfError(err, t)
+
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
+
 	for _, v := range FileMap {
 		if v.uploadShouldFail || v.extension != ".txt" {
 			continue
@@ -549,14 +885,17 @@ func FindObjectsUsingNameAndFilteringForTxtType(t *testing.T) {
 }
 
 func FindObjectsSmallerThan64Mebibytes(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
-	out, err := RunCommand("find", MainTestBucket, "--smaller", "64MB")
+	out, err := RunCommand(
+		"find",
+		MainTestBucket,
+		"--smaller",
+		"64MB",
+	)
 	fatalIfError(err, t)
+
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
+
 	for _, v := range FileMap {
 		if v.uploadShouldFail || v.diskStat.Size() > GetMBSizeInBytes(64) {
 			continue
@@ -576,14 +915,17 @@ func FindObjectsSmallerThan64Mebibytes(t *testing.T) {
 }
 
 func FindObjectsLargerThan64Mebibytes(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
-	out, err := RunCommand("find", MainTestBucket, "--larger", "64MB")
+	out, err := RunCommand(
+		"find",
+		MainTestBucket,
+		"--larger",
+		"64MB",
+	)
 	fatalIfError(err, t)
+
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
+
 	for _, v := range FileMap {
 		if v.uploadShouldFail || v.diskStat.Size() < GetMBSizeInBytes(64) {
 			continue
@@ -603,28 +945,34 @@ func FindObjectsLargerThan64Mebibytes(t *testing.T) {
 }
 
 func FindObjectsOlderThan1d(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
-	out, err := RunCommand("find", MainTestBucket, "--older-than", "1d")
+	out, err := RunCommand(
+		"find",
+		MainTestBucket,
+		"--older-than",
+		"1d",
+	)
 	fatalIfError(err, t)
+
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
+
 	if len(findList) > 0 {
 		t.Fatalf("We should not have found any files which are older then 1 day")
 	}
 }
 
 func FindObjectsNewerThen1d(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
-	out, err := RunCommand("find", MainTestBucket, "--newer-than", "1d")
+	out, err := RunCommand(
+		"find",
+		MainTestBucket,
+		"--newer-than",
+		"1d",
+	)
 	fatalIfError(err, t)
+
 	findList, err := parseFindJSONOutput(out)
 	fatalIfError(err, t)
+
 	for _, v := range FileMap {
 		if v.uploadShouldFail {
 			continue
@@ -644,28 +992,27 @@ func FindObjectsNewerThen1d(t *testing.T) {
 }
 
 func GetObjectsAndCompareMD5(t *testing.T) {
-	if MainTestBucket == "" {
-		t.Fatalf("This test depends on Test_CPAllFiles")
-	}
-
 	for _, v := range FileMap {
 		if v.uploadShouldFail {
 			continue
 		}
 
 		// make sure old downloads are not in our way
-		_ = os.Remove(os.TempDir() + "/" + v.fileNameWithoutPath + ".downloaded")
+		_ = os.Remove(TempDir + "/" + v.fileNameWithoutPath + ".downloaded")
 
-		_, err := RunCommand("cp", MainTestBucket+"/"+v.fileNameWithPrefix, os.TempDir()+"/"+v.fileNameWithoutPath+".downloaded")
+		_, err := RunCommand(
+			"cp",
+			MainTestBucket+"/"+v.fileNameWithPrefix,
+			TempDir+"/"+v.fileNameWithoutPath+".downloaded",
+		)
 		fatalIfError(err, t)
 
-		downloadedFile, err := os.Open(os.TempDir() + "/" + v.fileNameWithoutPath + ".downloaded")
+		downloadedFile, err := os.Open(TempDir + "/" + v.fileNameWithoutPath + ".downloaded")
 		fatalIfError(err, t)
-		md5Writer := md5.New()
+
 		fileBytes, err := io.ReadAll(downloadedFile)
-		fatalIfError(err, t)
-		md5Writer.Write(fileBytes)
-		md5sum := fmt.Sprintf("%x", md5Writer.Sum(nil))
+		md5sum := GetMD5Sum(fileBytes)
+
 		if v.md5Sum != md5sum {
 			t.Fatalf("The downloaded file md5sum is wrong: original-md5(%s) downloaded-md5(%s)", v.md5Sum, md5sum)
 		}
@@ -700,19 +1047,34 @@ func CreateBucketUsingInvalidSymbols(t *testing.T) {
 
 func RemoveBucketThatDoesNotExist(t *testing.T) {
 	randomID := uuid.NewString()
-
-	// TEST: bucket does not exist
-	out, _ := RunCommand("rb", ALIAS+"/"+randomID)
+	out, _ := RunCommand(
+		"rb",
+		ALIAS+"/"+randomID,
+	)
 	errMSG, _ := parseSingleErrorMessageJSONOutput(out)
-	validateErrorMSGValues(t, errMSG, "error", "Unable to validate", "does not exist")
+	validateErrorMSGValues(
+		t,
+		errMSG,
+		"error",
+		"Unable to validate",
+		"does not exist",
+	)
 }
 
 func RemoveBucketWithNameTooLong(t *testing.T) {
 	randomID := uuid.NewString()
-	// TEST: Name too long
-	out, _ := RunCommand("rb", ALIAS+"/"+randomID+randomID)
+	out, _ := RunCommand(
+		"rb",
+		ALIAS+"/"+randomID+randomID,
+	)
 	errMSG, _ := parseSingleErrorMessageJSONOutput(out)
-	validateErrorMSGValues(t, errMSG, "error", "Unable to validate", "Bucket name cannot be longer than 63 characters")
+	validateErrorMSGValues(
+		t,
+		errMSG,
+		"error",
+		"Unable to validate",
+		"Bucket name cannot be longer than 63 characters",
+	)
 }
 
 func UploadToUnknownBucket(t *testing.T) {
@@ -726,12 +1088,26 @@ func UploadToUnknownBucket(t *testing.T) {
 }
 
 func CLEANUP(t *testing.T) {
-	RemoveBucket(t, MainTestBucket)
-	for _, v := range FileMap {
-		_ = os.Remove(v.diskFile.Name())
-		if !v.uploadShouldFail {
-			_ = os.Remove(os.TempDir() + "/" + v.fileNameWithoutPath + ".downloaded")
+	var err error
+	var berr error
+	err = os.RemoveAll(TempDir)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	for _, v := range BucketList {
+		var out string
+		out, berr = RunCommand("rb", "--force", "--dangerous", v)
+		if berr != nil {
+			fmt.Printf("Unable to remove bucket bucket (%s) err: %s //  out: %s", v, err, out)
 		}
+	}
+
+	if berr != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -800,8 +1176,59 @@ func validateObjectMetaData(t *testing.T, file *testFile) {
 // 	}
 // }
 
+func GetSource(skip int) (out string) {
+	pc := make([]uintptr, 3) // at least 1 entry needed
+	runtime.Callers(skip, pc)
+	f := runtime.FuncForPC(pc[0])
+	file, line := f.FileLine(pc[0])
+	sn := strings.Split(f.Name(), ".")
+	var name string
+	if sn[len(sn)-1] == "func1" {
+		name = sn[len(sn)-2]
+	} else {
+		name = sn[len(sn)-1]
+	}
+	out = file + ":" + fmt.Sprint(line) + ":" + name
+	return
+}
+
+func GetMD5Sum(data []byte) string {
+	md5Writer := md5.New()
+	md5Writer.Write(data)
+	return fmt.Sprintf("%x", md5Writer.Sum(nil))
+}
+
+func fatalMsgOnly(msg string, t *testing.T) {
+	fmt.Println(GetSource(3))
+	t.Fatal(msg)
+}
+
+func fatalIfNoErrorWMsg(err error, msg string, t *testing.T) {
+	if err == nil {
+		fmt.Println(GetSource(3))
+		fmt.Println(msg)
+		t.Fatal(err)
+	}
+}
+
+func fatalIfNoError(err error, t *testing.T) {
+	if err == nil {
+		fmt.Println(GetSource(3))
+		t.Fatal(err)
+	}
+}
+
+func fatalIfErrorWMsg(err error, msg string, t *testing.T) {
+	if err != nil {
+		fmt.Println(GetSource(3))
+		fmt.Println(msg)
+		t.Fatal(err)
+	}
+}
+
 func fatalIfError(err error, t *testing.T) {
 	if err != nil {
+		fmt.Println(GetSource(3))
 		t.Fatal(err)
 	}
 }
@@ -980,10 +1407,10 @@ func (f *testFile) String() (out string) {
 }
 
 func createFile(nf newTestFile) (newTestFile *testFile) {
-	newFile, err := os.CreateTemp("", nf.tag+"-mc-test-file-*"+nf.extension)
+	newFile, err := os.CreateTemp(TempDir, nf.tag+"-mc-test-file-*"+nf.extension)
 	if err != nil {
 		log.Println(err)
-		return nil
+		os.Exit(1)
 	}
 	md5Writer := md5.New()
 	for i := 0; i < nf.sizeInMBS; i++ {
@@ -1054,11 +1481,13 @@ func RunCommand(parameters ...string) (out string, err error) {
 
 	if JSONOutput {
 		parameters = append([]string{JSON}, parameters...)
-		outBytes, outErr = exec.Command(CMD, parameters...).CombinedOutput()
-	} else {
-		outBytes, outErr = exec.Command(CMD, parameters...).CombinedOutput()
 	}
 
+	if SkipInsecure {
+		parameters = append(parameters, []string{"--insecure"}...)
+	}
+
+	outBytes, outErr = exec.Command(CMD, parameters...).CombinedOutput()
 	out = string(outBytes)
 	err = outErr
 	return
