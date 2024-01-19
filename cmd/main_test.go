@@ -1,13 +1,16 @@
 package cmd
 
+/**/
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -44,14 +47,14 @@ import (
 //  DONE  test_find_empty
 //  DONE  test_od_object
 //  DONE  test_mv_object
-//    test_presigned_post_policy_error
-//    test_presigned_put_object
-//    test_presigned_get_object
-//    test_cat_object
-//    test_cat_stdin
+//  ??? test_presigned_post_policy_error
+//  DONE  test_presigned_put_object
+//  DONE test_presigned_get_object
+//  DONE  test_cat_object
+//  DONE  test_cat_stdin
 //    test_copy_directory
-//    test_mirror_list_objects
-//    test_mirror_list_objects_storage_class
+//  DONE  test_mirror_list_objects
+//  DONE  test_mirror_list_objects_storage_class
 //    test_copy_object_preserve_filesystem_attr
 //		test_watch_object
 //
@@ -81,7 +84,7 @@ var (
 	RandomLargeString = "lksdjfljsdklfjklsdjfklksjdf;lsjdk;fjks;djflsdlfkjskldjfklkljsdfljsldkfjklsjdfkljsdklfjklsdjflksjdlfjsdjflsjdflsldfjlsjdflksjdflkjslkdjflksfdj"
 	JSON              = "--json"
 	JSONOutput        = true
-	CMD               = "../mc"
+	MC_CMD            = "./mc"
 	MetaPrefix        = "X-Amz-Meta-"
 
 	ServerEndpoint           = "play.min.io"
@@ -99,6 +102,8 @@ var (
 	BaseInvalidSSEEncodedKey = "MzJieXRlc2xvbmdzZWNyZWFiY2RlZmcJZ2l2ZW5uM="
 	BaseSSEEncodedKey        = "MzJieXRlc2xvbmdzZWNyZWFiY2RlZmcJZ2l2ZW5uMjE="
 	BaseInvalidSSEKey        = "32byteslongsecretkeymustbe"
+	CurlPath                 = "/usb/bin/curl"
+	HTTPClient               *http.Client
 )
 
 func GetMBSizeInBytes(MB int) int64 {
@@ -113,13 +118,6 @@ func initializeTestSuite(t *testing.T) {
 		if err != nil {
 			os.Exit(1)
 		}
-	}
-
-	var err error
-	TempDir, err = os.MkdirTemp("", "minio-mc-test")
-	if err != nil {
-		log.Println(err)
-		os.Exit(1)
 	}
 
 	envALIAS := os.Getenv("ALIAS")
@@ -140,22 +138,34 @@ func initializeTestSuite(t *testing.T) {
 	}
 
 	envSkipInsecure := os.Getenv("SKIP_INSECURE")
-	if envSkipInsecure == "true" {
-		SkipInsecure = true
-	}
+	SkipInsecure, _ = strconv.ParseBool(envSkipInsecure)
 
 	envEnableHTTP := os.Getenv("ENABLE_HTTPS")
-	if envEnableHTTP == "true" {
+	EnableHTTPS, _ := strconv.ParseBool(envEnableHTTP)
+	if EnableHTTPS {
 		Protocol = "https://"
 	}
 
 	envCMD := os.Getenv("CMD")
 	if envCMD != "" {
-		CMD = envCMD
+		MC_CMD = envCMD
+	}
+
+	var err error
+	TempDir, err = os.MkdirTemp("", "minio-mc-test")
+	if err != nil {
+		log.Println(err)
+		os.Exit(1)
 	}
 
 	for i := 0; i < len(OneMBSlice); i++ {
 		OneMBSlice[i] = byte(rand.Intn(250))
+	}
+
+	HTTPClient = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: SkipInsecure},
+		},
 	}
 
 	createFile(newTestFile{
@@ -244,6 +254,15 @@ func initializeTestSuite(t *testing.T) {
 	SSETestBucket = CreateBucket(t)
 }
 
+func preflightCheck(t *testing.T) {
+	out, err := exec.Command("which", "curl").Output()
+	fatalIfError(err, t)
+	if len(out) == 0 {
+		fatalMsgOnly("No curl found, output from 'which curl': "+string(out), t)
+	}
+	CurlPath = string(out)
+}
+
 func Test_FullSuite(t *testing.T) {
 	defer func() {
 		r := recover()
@@ -253,6 +272,8 @@ func Test_FullSuite(t *testing.T) {
 
 		CLEANUP(t)
 	}()
+
+	preflightCheck(t)
 	// initializeTestSuite builds the mc client and creates local files which are used for testing
 	initializeTestSuite(t)
 	// uploadAllFiles uploads all files in FileMap to MainTestBucket
@@ -260,11 +281,24 @@ func Test_FullSuite(t *testing.T) {
 	// LSObjects saves the output of LS inside *testFile in FileMap
 	LSObjects(t)
 	// StatObjecsts saves the output of Stat inside *testFile in FileMap
-	StatObjecsts(t)
+	StatObjects(t)
 	// ValidateFileMetaDataPostUpload validates the output of LS and Stat
 	ValidateFileMetaData(t)
 
 	// The following tests rely on files uploaded via (uploadAllFiles)
+	// but they can be ran independently.
+	// return
+
+	PutObjectPreserveAttributes(t)
+	return
+	// MirrorTempDirectoryStorageClassReducedRedundancy(t)
+	// MirrorTempDirectory(t)
+
+	ShareURLUploadTest(t)
+	ShareURLDownloadTest(t)
+
+	CatObjectFromStdin(t)
+	CatObjectToStdIn(t)
 
 	// OD(t)
 	FindObjects(t)
@@ -316,6 +350,285 @@ func CreateBucket(t *testing.T) (bucketPath string) {
 	return
 }
 
+func ShareURLUploadTest(t *testing.T) {
+	ShareURLTestBucket := CreateBucket(t)
+
+	file := FileMap["1M"]
+
+	out, err := RunCommand(
+		"share",
+		"upload",
+		ShareURLTestBucket+"/"+file.fileNameWithoutPath,
+	)
+	fatalIfErrorWMsg(err, out, t)
+
+	shareMsg, err := parseShareMessageFromJSONOutput(out)
+	fatalIfErrorWMsg(err, out, t)
+
+	finalURL := strings.Replace(shareMsg.ShareURL, "<FILE>", file.diskFile.Name(), -1)
+	splitCommand := strings.Split(finalURL, " ")
+
+	if SkipInsecure {
+		splitCommand = append(splitCommand, "--insecure")
+	}
+
+	_, err = exec.Command(splitCommand[0], splitCommand[1:]...).CombinedOutput()
+	fatalIfErrorWMsg(err, out, t)
+
+	out, err = RunCommand(
+		"stat",
+		ShareURLTestBucket+"/"+file.fileNameWithoutPath,
+	)
+	fatalIfErrorWMsg(err, out, t)
+
+	statMsg, err := parseStatSingleObjectJSONOutput(out)
+	fatalIfError(err, t)
+
+	if statMsg.ETag != file.md5Sum {
+		fatalMsgOnly(fmt.Sprintf("expecting md5sum (%s) but got md5sum (%s)", file.md5Sum, file.md5Sum), t)
+	}
+}
+
+func ShareURLDownloadTest(t *testing.T) {
+	// FakeObjectName := "fake-object-name"
+	file := FileMap["1M"]
+
+	out, err := RunCommand(
+		"share",
+		"download",
+		MainTestBucket+"/"+file.fileNameWithoutPath,
+	)
+	fatalIfErrorWMsg(err, out, t)
+
+	shareMsg, err := parseShareMessageFromJSONOutput(out)
+	fatalIfErrorWMsg(err, out, t)
+
+	resp, err := HTTPClient.Get(shareMsg.ShareURL)
+	fmt.Println(resp, err)
+	fatalIfError(err, t)
+
+	downloadedFile, err := io.ReadAll(resp.Body)
+	fatalIfError(err, t)
+
+	md5sum := GetMD5Sum(downloadedFile)
+	if md5sum != file.md5Sum {
+		fatalMsgOnly(
+			fmt.Sprintf("expecting md5sum (%s) but got md5sum (%s)", file.md5Sum, md5sum),
+			t,
+		)
+	}
+}
+
+func PutObjectPreserveAttributes(t *testing.T) {
+	AttrTestBucket := CreateBucket(t)
+	file := FileMap["1M"]
+	out, err := RunCommand(
+		"cp",
+		"-a",
+		file.diskFile.Name(),
+		AttrTestBucket+"/"+file.fileNameWithoutPath,
+	)
+	if err != nil {
+		t.Fatal(err, out)
+	}
+
+	out, err = RunCommand(
+		"stat",
+		AttrTestBucket+"/"+file.fileNameWithPrefix,
+	)
+	fatalIfError(err, t)
+
+	stats, err := parseStatSingleObjectJSONOutput(out)
+	fatalIfError(err, t)
+	fmt.Println(stats)
+}
+
+func MirrorTempDirectoryStorageClassReducedRedundancy(t *testing.T) {
+	MirrorBucket := CreateBucket(t)
+
+	p := make([]string, 0)
+	p = append(p, "mirror")
+	p = append(p, "--storage-class", "REDUCED_REDUNDANCY")
+	p = append(p, TempDir)
+	p = append(p, MirrorBucket)
+
+	out, err := RunCommand(p...)
+	fatalIfErrorWMsg(err, out, t)
+
+	out, err = RunCommand("ls", "-r", MirrorBucket)
+	fatalIfError(err, t)
+
+	fileList, err := parseLSJSONOutput(out)
+	fatalIfError(err, t)
+
+	for i, f := range FileMap {
+		fileFound := false
+
+		for _, o := range fileList {
+			if o.Key == f.fileNameWithoutPath {
+				FileMap[i].MinioLS = o
+				fileFound = true
+			}
+		}
+
+		if !fileFound {
+			t.Fatalf("File was not uploaded: %s", f.fileNameWithPrefix)
+		}
+	}
+}
+
+func MirrorTempDirectory(t *testing.T) {
+	MirrorBucket := CreateBucket(t)
+
+	p := make([]string, 0)
+	p = append(p, "mirror")
+	p = append(p, TempDir)
+	p = append(p, MirrorBucket)
+
+	out, err := RunCommand(p...)
+	fatalIfErrorWMsg(err, out, t)
+
+	out, err = RunCommand("ls", "-r", MirrorBucket)
+	fatalIfError(err, t)
+
+	fileList, err := parseLSJSONOutput(out)
+	fatalIfError(err, t)
+
+	for i, f := range FileMap {
+		fileFound := false
+
+		for _, o := range fileList {
+			if o.Key == f.fileNameWithoutPath {
+				FileMap[i].MinioLS = o
+				fileFound = true
+			}
+		}
+
+		if !fileFound {
+			t.Fatalf("File was not uploaded: %s", f.fileNameWithPrefix)
+		}
+	}
+}
+
+func CatObjectFromStdinV2(t *testing.T) {
+	objectName := "pipe-test-object"
+	CatEchoBucket := CreateBucket(t)
+
+	p := []string{
+		"pipe",
+		CatEchoBucket + "/" + objectName,
+	}
+	if SkipInsecure {
+		p = append(p, "--insecure")
+	}
+
+	cmdMC := exec.Command(MC_CMD, p...)
+
+	r, w := io.Pipe()
+	defer r.Close()
+	defer w.Close()
+	cmdMC.Stdin = r
+
+	err := cmdMC.Start()
+	fatalIfError(err, t)
+
+	file := FileMap["1M"]
+	fileBytes, err := os.ReadFile(file.diskFile.Name())
+	fatalIfError(err, t)
+	_, err = w.Write(fileBytes)
+	fatalIfError(err, t)
+
+	w.Close()
+	err = cmdMC.Wait()
+	fatalIfError(err, t)
+	r.Close()
+
+	outB, err := RunCommand(
+		"cat",
+		CatEchoBucket+"/"+objectName,
+	)
+	fatalIfErrorWMsg(err, outB, t)
+
+	md5SumCat := GetMD5Sum([]byte(outB))
+	if file.md5Sum != md5SumCat {
+		fatalMsgOnly(
+			fmt.Sprintf("expecting md5sum (%s) but got md5sum (%s)", file.md5Sum, md5SumCat),
+			t,
+		)
+	}
+}
+
+func CatObjectFromStdin(t *testing.T) {
+	objectName := "pipe-test-object"
+	CatEchoBucket := CreateBucket(t)
+
+	file := FileMap["1M"]
+
+	cmdCAT := exec.Command(
+		"cat",
+		file.diskFile.Name(),
+	)
+
+	p := []string{
+		"pipe",
+		CatEchoBucket + "/" + objectName,
+	}
+	if SkipInsecure {
+		p = append(p, "--insecure")
+	}
+
+	cmdMC := exec.Command(MC_CMD, p...)
+
+	r, w := io.Pipe()
+	defer r.Close()
+	defer w.Close()
+	cmdCAT.Stdout = w
+	cmdMC.Stdin = r
+
+	err := cmdCAT.Start()
+	fatalIfError(err, t)
+	err = cmdMC.Start()
+	fatalIfError(err, t)
+
+	err = cmdCAT.Wait()
+	fatalIfError(err, t)
+	w.Close()
+	err = cmdMC.Wait()
+	fatalIfError(err, t)
+	r.Close()
+
+	outB, err := RunCommand(
+		"cat",
+		CatEchoBucket+"/"+objectName,
+	)
+	fatalIfErrorWMsg(err, outB, t)
+
+	md5SumCat := GetMD5Sum([]byte(outB))
+	if file.md5Sum != md5SumCat {
+		fatalMsgOnly(
+			fmt.Sprintf("expecting md5sum (%s) but got md5sum (%s)", file.md5Sum, md5SumCat),
+			t,
+		)
+	}
+}
+
+func CatObjectToStdIn(t *testing.T) {
+	file := FileMap["1M"]
+	out, err := RunCommand(
+		"cat",
+		MainTestBucket+"/"+file.fileNameWithoutPath,
+	)
+	fatalIfErrorWMsg(err, out, t)
+	// fmt.Println(len(out))
+	md5Sum := GetMD5Sum([]byte(out))
+	if md5Sum != file.md5Sum {
+		fatalMsgOnly(
+			fmt.Sprintf("expecting md5sum (%s) but got md5sum (%s)", file.md5Sum, md5Sum),
+			t,
+		)
+	}
+}
+
 func PutObjectWithSSEMultipart(t *testing.T) {
 	file := FileMap["65M"]
 	p := make([]string, 0)
@@ -332,12 +645,12 @@ func PutObjectWithSSEMultipart(t *testing.T) {
 
 func PutObjectWithSSE(t *testing.T) {
 	file := FileMap["1M"]
-	p := make([]string, 0)
-	p = append(p, "cp")
-	p = append(p, "--encrypt-key="+SSETestBucket+"="+BaseSSEKey)
-	p = append(p, file.diskFile.Name())
-	p = append(p, SSETestBucket+"/"+file.fileNameWithoutPath)
-	out, err := RunCommand(p...)
+	out, err := RunCommand(
+		"cp",
+		"--encrypt-key="+SSETestBucket+"="+BaseSSEKey,
+		file.diskFile.Name(),
+		SSETestBucket+"/"+file.fileNameWithoutPath,
+	)
 	if err != nil {
 		t.Fatal(err, out)
 	}
@@ -773,7 +1086,7 @@ func LSObjects(t *testing.T) {
 	}
 }
 
-func StatObjecsts(t *testing.T) {
+func StatObjects(t *testing.T) {
 	for i, v := range FileMap {
 		if v.uploadShouldFail {
 			continue
@@ -1372,6 +1685,12 @@ func validateErrorMSGValues(
 	}
 }
 
+func parseShareMessageFromJSONOutput(out string) (share *shareMessage, err error) {
+	share = new(shareMessage)
+	err = json.Unmarshal([]byte(out), share)
+	return
+}
+
 func parseSingleErrorMessageJSONOutput(out string) (errMSG errorMessageWrapper, err error) {
 	err = json.Unmarshal([]byte(out), &errMSG)
 	if err != nil {
@@ -1504,7 +1823,7 @@ func createFile(nf newTestFile) (newTestFile *testFile) {
 }
 
 func BuildCLI() error {
-	out, err := exec.Command("go", "build", "../.").CombinedOutput()
+	out, err := exec.Command("go", "build", ".").CombinedOutput()
 	if err != nil {
 		log.Println(err)
 		return err
@@ -1514,7 +1833,7 @@ func BuildCLI() error {
 }
 
 func RunCommand(parameters ...string) (out string, err error) {
-	log.Println("EXEC |>", CMD, strings.Join(parameters, " "))
+	log.Println("EXEC |>", MC_CMD, strings.Join(parameters, " "))
 	var outBytes []byte
 	var outErr error
 
@@ -1526,7 +1845,7 @@ func RunCommand(parameters ...string) (out string, err error) {
 		parameters = append(parameters, []string{"--insecure"}...)
 	}
 
-	outBytes, outErr = exec.Command(CMD, parameters...).CombinedOutput()
+	outBytes, outErr = exec.Command(MC_CMD, parameters...).CombinedOutput()
 	out = string(outBytes)
 	err = outErr
 	return

@@ -187,7 +187,7 @@ func doShareDownloadURL(ctx context.Context, targetURL, versionID string, isRecu
 		// Make new entries to shareDB.
 		contentType := "" // Not useful for download shares.
 		shareDB.Set(objectURL, shareURL, expiry, contentType)
-		printMsg(shareMesssage{
+		printMsg(shareMessage{
 			ObjectURL:   objectURL,
 			ShareURL:    shareURL,
 			TimeLeft:    expiry,
