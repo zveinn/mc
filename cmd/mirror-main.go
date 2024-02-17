@@ -559,6 +559,9 @@ func (mj *mirrorJob) monitorMirrorStatus(cancel context.CancelFunc) (errDuringMi
 				if !mj.opts.activeActive && !mj.opts.isWatch {
 					cancel()
 					cancelInProgress = true
+				} else if mj.opts.isWatch {
+					cancel()
+					cancelInProgress = true
 				}
 			}
 
