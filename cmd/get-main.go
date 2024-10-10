@@ -42,7 +42,7 @@ var getCmd = cli.Command{
 	Action:       mainGet,
 	OnUsageError: onUsageError,
 	Before:       setGlobalsFromContext,
-	Flags:        append(append(globalFlags, encCFlag), getFlags...),
+	Flags:        append(append(globalFlags, encFlags...), getFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -57,8 +57,14 @@ EXAMPLES:
   1. Get an object from MinIO storage to local file system
      {{.Prompt}} {{.HelpName}} play/mybucket/object path-to/object
 
-  2. Get an object from MinIO storage using encryption
+  2. Get an object from MinIO storage using client side encryption
      {{.Prompt}} {{.HelpName}} --enc-c "play/mybucket/object=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDA" play/mybucket/object path-to/object
+
+  3. Get an object from MinIO storage using kms encryption
+     {{.Prompt}} {{.HelpName}} --enc-kms "play/mybucket/object=kms-key" play/mybucket/object path-to/object
+
+  4. Get an object from MinIO storage using s3 encryption
+     {{.Prompt}} {{.HelpName}} --enc-s3 "play/mybucket/object" play/mybucket/object path-to/object
 `,
 }
 
